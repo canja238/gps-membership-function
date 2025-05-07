@@ -1,0 +1,200 @@
+#include <SoftwareSerial.h>
+#include <TinyGPS++.h>
+
+// GPS Module
+#define GPS_SERIAL Serial1  // Use Serial1 for GPS (TX1=Pin 18, RX1=Pin 19 on Arduino Mega)
+TinyGPSPlus gps;
+
+// HC-12 for communication
+#define HC12_SERIAL Serial2 // Use Serial2 for HC-12 (TX2=Pin 16, RX2=Pin 17 on Arduino Mega)
+
+// Motor control pins for L293D motor driver
+const int ENA = 12;  // Enable pin for Motor A
+const int ENB = 13;  // Enable pin for Motor B
+const int motorPin1 = 8;  // Pin 14 of L293D (Motor A - Direction 1)
+const int motorPin2 = 9;  // Pin 10 of L293D (Motor A - Direction 2)
+const int motorPin3 = 11; // Pin 7 of L293D (Motor B - Direction 1)
+const int motorPin4 = 10; // Pin 2 of L293D (Motor B - Direction 2)
+
+// Path coordinates (Predefined)
+double path[100][2] = {
+  // Define your GPS coordinates here...
+  {7.214941000, 124.249145000}, {7.214940679, 124.249146167}, {7.214940357, 124.249147333}, 
+  {7.214940036, 124.249148500}  // Add more waypoints as needed
+};
+int pathIndex = 0;  // Index to track the current target in the path
+
+// Triangular Membership Function (TMF) Parameters for distance
+double TMFCenter[] = {10, 50, 100};  // Near, Mid, Far distances in meters
+double TMFWidth[] = {20, 40, 80};   // Width of each fuzzy region
+
+double DOM[3];  // Degree of Membership for each fuzzy set (Near, Mid, Far)
+
+double RULES[3];  // Fuzzy rule results
+double WL[3];     // Left motor speeds corresponding to rules
+double WR[3];     // Right motor speeds corresponding to rules
+
+double tempSummationL = 0;
+double tempSummationR = 0;
+double tempSummation = 0;
+
+double YL = 0;  // Left motor speed (defuzzified)
+double YR = 0;  // Right motor speed (defuzzified)
+
+// Robot Speed Constants
+double robotTopSpeed = 0.3333; // meters per second (m/s)
+double robotTopSpeed50Percent = 0.16665;  // 50% speed
+double deltaT = 0.775;  // Time in seconds
+double distanceTraveledAfterDeltaT = robotTopSpeed50Percent * deltaT;  // 0.1291925 meters
+
+void setup() {
+  // Start serial communication for GPS and HC-12
+  Serial.begin(9600);  // Use Serial to communicate with the desktop
+  GPS_SERIAL.begin(9600);  // Initialize GPS communication
+  HC12_SERIAL.begin(9600);  // Initialize HC-12 communication
+  
+  // Initialize motor control pins
+  pinMode(ENA, OUTPUT);   // Enable pin for Motor A
+  pinMode(ENB, OUTPUT);   // Enable pin for Motor B
+  pinMode(motorPin1, OUTPUT); // Motor A direction pin 1
+  pinMode(motorPin2, OUTPUT); // Motor A direction pin 2
+  pinMode(motorPin3, OUTPUT); // Motor B direction pin 1
+  pinMode(motorPin4, OUTPUT); // Motor B direction pin 2
+
+  Serial.println("Robot GPS Pathfinding Initialized...");
+}
+
+void loop() {
+  // Check for new GPS data
+  while (GPS_SERIAL.available() > 0) {
+    gps.encode(GPS_SERIAL.read());
+  }
+
+  if (gps.location.isUpdated()) {
+    double currentLat = gps.location.lat();
+    double currentLon = gps.location.lng();
+    
+    // Calculate the distance from the current position to the next target in the path
+    double distanceToTarget = calculateDistance(currentLat, currentLon, path[pathIndex][0], path[pathIndex][1]);
+
+    // Display the current position and distance to the target
+    Serial.print("Current Latitude: ");
+    Serial.println(currentLat, 6);
+    Serial.print("Current Longitude: ");
+    Serial.println(currentLon, 6);
+    Serial.print("Distance to Target: ");
+    Serial.println(distanceToTarget);
+
+    // Send data to desktop via HC-12
+    HC12_SERIAL.print("Current Latitude: ");
+    HC12_SERIAL.println(currentLat, 6);
+    HC12_SERIAL.print("Current Longitude: ");
+    HC12_SERIAL.println(currentLon, 6);
+    HC12_SERIAL.print("Distance to Target: ");
+    HC12_SERIAL.println(distanceToTarget);
+
+    // Calculate Degree of Membership (DOM) for distance using triangular membership function
+    for (int i = 0; i < 3; i++) {
+      if ((TMFCenter[i] - TMFWidth[i] / 2) < distanceToTarget && distanceToTarget < (TMFCenter[i] + TMFWidth[i] / 2)) {
+        // Calculate the DOM value for the distance
+        DOM[i] = 1 - (2 * fabs(distanceToTarget - TMFCenter[i]) / TMFWidth[i]);
+      } else {
+        DOM[i] = 0;
+      }
+    }
+
+    // Define fuzzy rules based on DOM values (these rules can be adjusted based on your needs)
+    RULES[0] = DOM[0];  // Close range
+    WL[0] = robotTopSpeed50Percent;
+    WR[0] = robotTopSpeed50Percent;
+
+    RULES[1] = DOM[1];  // Mid range
+    WL[1] = robotTopSpeed * 0.75;  // 75% of top speed
+    WR[1] = robotTopSpeed * 0.75;
+
+    RULES[2] = DOM[2];  // Far range
+    WL[2] = robotTopSpeed;
+    WR[2] = robotTopSpeed;
+
+    // Calculate the defuzzified values YL and YR (left and right motor speeds)
+    for (int i = 0; i < 3; i++) {
+      tempSummationL += RULES[i] * WL[i];
+      tempSummationR += RULES[i] * WR[i];
+      tempSummation += RULES[i];
+    }
+
+    YL = tempSummationL / tempSummation;
+    YR = tempSummationR / tempSummation;
+
+    // Output the results for motor control
+    Serial.print("YL = ");
+    Serial.print(YL);
+    Serial.print("    YR = ");
+    Serial.println(YR);
+
+    // Set motor speeds based on the defuzzified values
+    motorSpeedLeft = YL;   // Set left motor speed from fuzzy logic
+    motorSpeedRight = YR;  // Set right motor speed from fuzzy logic
+
+    // Control Motor A (Left motor)
+    if (motorSpeedLeft > 0) {
+      digitalWrite(motorPin1, HIGH);
+      digitalWrite(motorPin2, LOW);
+      analogWrite(ENA, motorSpeedLeft * 255);  // Scale motor speed (0-255 range)
+    } else if (motorSpeedLeft < 0) {
+      digitalWrite(motorPin1, LOW);
+      digitalWrite(motorPin2, HIGH);
+      analogWrite(ENA, -motorSpeedLeft * 255);  // Scale motor speed (0-255 range)
+    } else {
+      analogWrite(ENA, 0);  // Stop motor if speed is 0
+    }
+
+    // Control Motor B (Right motor)
+    if (motorSpeedRight > 0) {
+      digitalWrite(motorPin3, HIGH);
+      digitalWrite(motorPin4, LOW);
+      analogWrite(ENB, motorSpeedRight * 255);  // Scale motor speed (0-255 range)
+    } else if (motorSpeedRight < 0) {
+      digitalWrite(motorPin3, LOW);
+      digitalWrite(motorPin4, HIGH);
+      analogWrite(ENB, -motorSpeedRight * 255);  // Scale motor speed (0-255 range)
+    } else {
+      analogWrite(ENB, 0);  // Stop motor if speed is 0
+    }
+
+    // Check if the robot is close to the current target
+    if (distanceToTarget < 5) {  // 5 meters tolerance
+      pathIndex++;  // Move to the next target
+      if (pathIndex >= sizeof(path) / sizeof(path[0])) {
+        pathIndex = 0;  // Loop back to the first target when the end is reached
+      }
+    }
+
+    // Reset temporary variables for next iteration
+    tempSummationL = 0;
+    tempSummationR = 0;
+    tempSummation = 0;
+  }
+
+  // Delay to allow for more readable output
+  delay(1000);
+}
+
+// Function to calculate the distance between two GPS coordinates (in meters)
+double calculateDistance(double lat1, double lon1, double lat2, double lon2) {
+  const double earthRadius = 6371000;  // Radius of the Earth in meters
+  double lat1Rad = radians(lat1);
+  double lon1Rad = radians(lon1);
+  double lat2Rad = radians(lat2);
+  double lon2Rad = radians(lon2);
+
+  double dlat = lat2Rad - lat1Rad;
+  double dlon = lon2Rad - lon1Rad;
+
+  double a = sin(dlat / 2) * sin(dlat / 2) +
+             cos(lat1Rad) * cos(lat2Rad) *
+             sin(dlon / 2) * sin(dlon / 2);
+  double c = 2 * atan2(sqrt(a), sqrt(1 - a));
+
+  return earthRadius * c;  // Distance in meters
+}
