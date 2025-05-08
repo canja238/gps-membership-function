@@ -67,6 +67,10 @@ double tempSummation = 0;
 double YL = 0;  // Left motor speed (defuzzified)
 double YR = 0;  // Right motor speed (defuzzified)
 
+// Motor speeds for left and right motors
+double motorSpeedLeft = 0;   // Declare motorSpeedLeft
+double motorSpeedRight = 0;  // Declare motorSpeedRight
+
 // Robot Speed Constants
 double robotTopSpeed = 0.3333; // meters per second (m/s)
 double robotTopSpeed50Percent = 0.16665;  // 50% speed
@@ -206,21 +210,12 @@ void loop() {
   delay(1000);
 }
 
-// Function to calculate the distance between two GPS coordinates (in meters)
+// Function to calculate distance between two GPS coordinates (in meters)
 double calculateDistance(double lat1, double lon1, double lat2, double lon2) {
-  const double earthRadius = 6371000;  // Radius of the Earth in meters
-  double lat1Rad = radians(lat1);
-  double lon1Rad = radians(lon1);
-  double lat2Rad = radians(lat2);
-  double lon2Rad = radians(lon2);
-
-  double dlat = lat2Rad - lat1Rad;
-  double dlon = lon2Rad - lon1Rad;
-
-  double a = sin(dlat / 2) * sin(dlat / 2) +
-             cos(lat1Rad) * cos(lat2Rad) *
-             sin(dlon / 2) * sin(dlon / 2);
+  double dlat = radians(lat2 - lat1);
+  double dlon = radians(lon2 - lon1);
+  double a = sin(dlat / 2) * sin(dlat / 2) + cos(radians(lat1)) * cos(radians(lat2)) * sin(dlon / 2) * sin(dlon / 2);
   double c = 2 * atan2(sqrt(a), sqrt(1 - a));
-
-  return earthRadius * c;  // Distance in meters
+  double distance = 6371000 * c;  // Radius of Earth in meters
+  return distance;
 }
