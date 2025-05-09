@@ -1,0 +1,35 @@
+% Rule Base for Path Following with Obstacle Avoidance
+% --------------------------------------------------
+% Format: If (distance is X) and (heading is Y) then (pwm_left, pwm_right)
+
+1. If (distance_error is Near) and (heading_error is Zero) then (pwm_left is Medium, pwm_right is Medium) [1]
+2. If (distance_error is Near) and (heading_error is LeftSmall) then (pwm_left is MediumLow, pwm_right is MediumHigh) [1]
+3. If (distance_error is Near) and (heading_error is LeftBig) then (pwm_left is Low, pwm_right is High) [1]
+4. If (distance_error is Near) and (heading_error is RightSmall) then (pwm_left is MediumHigh, pwm_right is MediumLow) [1]
+5. If (distance_error is Near) and (heading_error is RightBig) then (pwm_left is High, pwm_right is Low) [1]
+
+6. If (distance_error is Mid) and (heading_error is Zero) then (pwm_left is MediumHigh, pwm_right is MediumHigh) [1]
+7. If (distance_error is Mid) and (heading_error is LeftSmall) then (pwm_left is Medium, pwm_right is High) [1]
+8. If (distance_error is Mid) and (heading_error is LeftBig) then (pwm_left is Low, pwm_right is VeryHigh) [1]
+9. If (distance_error is Mid) and (heading_error is RightSmall) then (pwm_left is High, pwm_right is Medium) [1]
+10. If (distance_error is Mid) and (heading_error is RightBig) then (pwm_left is VeryHigh, pwm_right is Low) [1]
+
+11. If (distance_error is Far) and (heading_error is Zero) then (pwm_left is High, pwm_right is High) [1]
+12. If (distance_error is Far) and (heading_error is LeftSmall) then (pwm_left is MediumHigh, pwm_right is VeryHigh) [1]
+13. If (distance_error is Far) and (heading_error is LeftBig) then (pwm_left is Medium, pwm_right is Max) [1]
+14. If (distance_error is Far) and (heading_error is RightSmall) then (pwm_left is VeryHigh, pwm_right is MediumHigh) [1]
+15. If (distance_error is Far) and (heading_error is RightBig) then (pwm_left is Max, pwm_right is Medium) [1]
+
+% Recovery Rules for Extreme Cases
+16. If (distance_error is VeryNear) and (heading_error is Zero) then (pwm_left is Low, pwm_right is Low) [1]
+17. If (distance_error is VeryNear) and (heading_error is LeftSmall) then (pwm_left is VeryLow, pwm_right is Low) [1]
+18. If (distance_error is VeryNear) and (heading_error is LeftBig) then (pwm_left is Stop, pwm_right is MediumLow) [1]
+19. If (distance_error is VeryNear) and (heading_error is RightSmall) then (pwm_left is Low, pwm_right is VeryLow) [1]
+20. If (distance_error is VeryNear) and (heading_error is RightBig) then (pwm_left is MediumLow, pwm_right is Stop) [1]
+
+% Special Maneuvering Rules
+21. If (distance_error is VeryFar) and (heading_error is Zero) then (pwm_left is VeryHigh, pwm_right is VeryHigh) [1]
+22. If (distance_error is VeryFar) and (heading_error is LeftSmall) then (pwm_left is High, pwm_right is Max) [1]
+23. If (distance_error is VeryFar) and (heading_error is LeftBig) then (pwm_left is MediumHigh, pwm_right is Max) [1]
+24. If (distance_error is VeryFar) and (heading_error is RightSmall) then (pwm_left is Max, pwm_right is High) [1]
+25. If (distance_error is VeryFar) and (heading_error is RightBig) then (pwm_left is Max, pwm_right is MediumHigh) [1]
