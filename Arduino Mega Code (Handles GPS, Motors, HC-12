@@ -1,0 +1,86 @@
+#include <TinyGPS++.h>
+#include <SoftwareSerial.h>
+
+// GPS Setup (NEO-M8N)
+TinyGPSPlus gps;
+SoftwareSerial gpsSerial(10, 11);  // RX, TX for GPS
+
+// HC-12 Wireless (Arduino ↔ MATLAB)
+SoftwareSerial hc12(8, 9);  // RX, TX for HC-12
+
+// L298N Motor Driver Pins
+#define ENA 5   // PWM Left Motor
+#define IN1 6   // Direction
+#define IN2 7   
+#define ENB 3   // PWM Right Motor
+#define IN3 4   // Direction
+#define IN4 2   
+
+// Waypoints (Latitude, Longitude)
+const double waypoints[][2] = {
+  {7.214941000, 124.249145000}, 
+  {7.214940679, 124.249146167},
+  // ... Add all your waypoints here
+};
+int currentWaypoint = 0;
+
+void setup() {
+  Serial.begin(9600);
+  gpsSerial.begin(9600);  // GPS Baud Rate
+  hc12.begin(9600);      // HC-12 Baud Rate
+
+  // Motor Control Pins
+  pinMode(ENA, OUTPUT);
+  pinMode(IN1, OUTPUT);
+  pinMode(IN2, OUTPUT);
+  pinMode(ENB, OUTPUT);
+  pinMode(IN3, OUTPUT);
+  pinMode(IN4, OUTPUT);
+
+  // Initialize Motors (Stop)
+  analogWrite(ENA, 0);
+  analogWrite(ENB, 0);
+}
+
+void loop() {
+  // Read GPS Data
+  while (gpsSerial.available() > 0) {
+    if (gps.encode(gpsSerial.read())) {
+      if (gps.location.isValid()) {
+        // Send GPS data to MATLAB via HC-12
+        hc12.print(gps.location.lat(), 6);
+        hc12.print(",");
+        hc12.print(gps.location.lng(), 6);
+        hc12.print(",");
+        hc12.println(gps.course.deg());  // Add heading for MATLAB
+      }
+    }
+  }
+
+  // Check for PWM commands from MATLAB
+  if (hc12.available() > 0) {
+    String pwmCommand = hc12.readStringUntil('\n');
+    int comma1 = pwmCommand.indexOf(',');
+    int comma2 = pwmCommand.indexOf(',', comma1 + 1);
+    
+    int pwmLeft = pwmCommand.substring(0, comma1).toInt();
+    int pwmRight = pwmCommand.substring(comma1 + 1, comma2).toInt();
+    int waypointReached = pwmCommand.substring(comma2 + 1).toInt();
+
+    // Update waypoint if needed
+    if (waypointReached == 1) {
+      currentWaypoint++;
+      if (currentWaypoint >= sizeof(waypoints) / sizeof(waypoints[0])) {
+        currentWaypoint = 0;  // Loop path
+      }
+    }
+
+    // Drive Motors (Forward)
+    analogWrite(ENA, pwmLeft);
+    analogWrite(ENB, pwmRight);
+    digitalWrite(IN1, HIGH);
+    digitalWrite(IN2, LOW);
+    digitalWrite(IN3, HIGH);
+    digitalWrite(IN4, LOW);
+  }
+}
