@@ -1,22 +1,26 @@
 clear; clc;
 
-% Serial Port Setup (HC-12)
-hc12 = serialport("COM5", 9600);  % Adjust COM port
+% Serial Port Setup
+hc12 = serialport("COM5", 9600); % Adjust COM port
 configureTerminator(hc12, "LF");
 
 % Load Fuzzy Logic System
-fis = readfis('path_following.fis');
+fis = readfis('path_following.fis'); 
 
-% Waypoints (Same as Arduino)
+% Waypoints (same as Arduino)
 waypoints = [
     7.214941000, 124.249145000;
     7.214940679, 124.249146167;
-    % ... Add all waypoints
+    % Add all waypoints...
 ];
 currentWaypoint = 1;
 
+% Speed Parameters
+max_speed_mps = 0.3333;  % 100% speed
+deltaT = 0.775;          % Control interval
+
 while true
-    % Read GPS Data from Arduino
+    % Read GPS data from Arduino
     data = readline(hc12);
     values = strsplit(data, ',');
     
@@ -25,41 +29,47 @@ while true
         lng = str2double(values(2));
         heading = str2double(values(3));
         
-        % Calculate Errors
+        % Calculate errors
         target_lat = waypoints(currentWaypoint, 1);
         target_lng = waypoints(currentWaypoint, 2);
         
-        distance_error = deg2km(distance(lat, lng, target_lat, target_lng)) * 1000; % in meters
-        target_heading = atan2d(sin(target_lng - lng) * cos(target_lat), ...
-                               cos(lat) * sin(target_lat) - sin(lat) * cos(target_lat) * cos(target_lng - lng));
+        distance_error = deg2km(distance(lat,lng,target_lat,target_lng)) * 1000;
+        target_heading = atan2d(sin(target_lng-lng)*cos(target_lat), ...
+                             cos(lat)*sin(target_lat) - sin(lat)*cos(target_lat)*cos(target_lng-lng));
         heading_error = wrapTo180(target_heading - heading);
         
         % Fuzzy Logic Evaluation
         pwm_output = evalfis(fis, [distance_error, heading_error]);
-        pwm_left = round(pwm_output(1));
-        pwm_right = round(pwm_output(2));
         
-        % Check Waypoint Reached (1m threshold)
+        % Scale to actual speeds (m/s)
+        speed_left = (pwm_output(1)/255) * max_speed_mps;
+        speed_right = (pwm_output(2)/255) * max_speed_mps;
+        
+        % Convert back to PWM (for Arduino)
+        pwm_left = round((speed_left / max_speed_mps) * 255);
+        pwm_right = round((speed_right / max_speed_mps) * 255);
+        
+        % Check waypoint reached (using 50% speed travel distance)
         waypointReached = 0;
-        if distance_error < 1.0
+        if distance_error < (0.16665 * deltaT) % 50% speed × deltaT
             waypointReached = 1;
             currentWaypoint = currentWaypoint + 1;
             if currentWaypoint > size(waypoints, 1)
-                currentWaypoint = 1;  % Loop path
+                currentWaypoint = 1;
             end
         end
         
-        % Send PWM Values to Arduino
+        % Send to Arduino
         writeline(hc12, sprintf('%d,%d,%d', pwm_left, pwm_right, waypointReached));
     end
 end
 
-% Distance Calculation (Haversine - From Your Reference Code)
+% Distance calculation (Haversine)
 function dist = distance(lat1, lon1, lat2, lon2)
-    R = 6371;  % Earth radius in km
-    dLat = deg2rad(lat2 - lat1);
-    dLon = deg2rad(lon2 - lon1);
-    a = sin(dLat/2)^2 + cos(deg2rad(lat1)) * cos(deg2rad(lat2)) * sin(dLon/2)^2;
+    R = 6371; % Earth radius in km
+    dLat = deg2rad(lat2-lat1);
+    dLon = deg2rad(lon2-lon1);
+    a = sin(dLat/2)^2 + cos(deg2rad(lat1))*cos(deg2rad(lat2))*sin(dLon/2)^2;
     c = 2 * atan2(sqrt(a), sqrt(1-a));
     dist = R * c;
 end
