@@ -1,0 +1,67 @@
+% Clear workspace
+clear; clc;
+
+% Serial Port Setup (HC-12)
+hc12 = serialport("COM5", 9600);  % Change COM port as needed
+configureTerminator(hc12, "LF");
+
+% Load Fuzzy Logic System
+fis = readfis('path_following.fis');
+
+% Waypoints (Same as Arduino)
+waypoints = [
+    7.214941000, 124.249145000;
+    7.214940679, 124.249146167;
+    % ... Add all waypoints
+];
+currentWaypoint = 1;
+
+% Main Loop
+while true
+    % Read GPS Data from Arduino
+    data = readline(hc12);
+    values = strsplit(data, ',');
+    
+    if numel(values) >= 3
+        lat = str2double(values(1));
+        lng = str2double(values(2));
+        heading = str2double(values(3));
+        
+        % Calculate Errors
+        target_lat = waypoints(currentWaypoint, 1);
+        target_lng = waypoints(currentWaypoint, 2);
+        
+        distance_error = deg2km(distance(lat, lng, target_lat, target_lng)) * 1000; % in meters
+        target_heading = atan2d(sin(target_lng - lng) * cos(target_lat), ...
+                               cos(lat) * sin(target_lat) - sin(lat) * cos(target_lat) * cos(target_lng - lng));
+        heading_error = wrapTo180(target_heading - heading);
+        
+        % Fuzzy Logic Evaluation
+        pwm_output = evalfis(fis, [distance_error, heading_error]);
+        pwm_left = round(pwm_output(1));
+        pwm_right = round(pwm_output(2));
+        
+        % Check if waypoint is reached (1m threshold)
+        waypointReached = 0;
+        if distance_error < 1.0
+            waypointReached = 1;
+            currentWaypoint = currentWaypoint + 1;
+            if currentWaypoint > size(waypoints, 1)
+                currentWaypoint = 1;  % Loop path
+            end
+        end
+        
+        % Send PWM values back to Arduino
+        writeline(hc12, sprintf('%d,%d,%d', pwm_left, pwm_right, waypointReached));
+    end
+end
+
+% Helper function to compute distance (Haversine)
+function dist = distance(lat1, lon1, lat2, lon2)
+    R = 6371;  % Earth radius in km
+    dLat = deg2rad(lat2 - lat1);
+    dLon = deg2rad(lon2 - lon1);
+    a = sin(dLat/2)^2 + cos(deg2rad(lat1)) * cos(deg2rad(lat2)) * sin(dLon/2)^2;
+    c = 2 * atan2(sqrt(a), sqrt(1-a));
+    dist = R * c;
+end
