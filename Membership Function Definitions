@@ -1,0 +1,24 @@
+% Distance Error (meters)
+VeryNear = [0 0 1 2]       % 0-2m
+Near = [1 2 3 5]            % 2-5m
+Mid = [3 5 7 10]            % 5-10m
+Far = [7 10 15 20]          % 10-20m
+VeryFar = [15 20 30 50]     % 20-50m
+
+% Heading Error (degrees)
+LeftBig = [-45 -30 -20 -10] % -45° to -10°
+LeftSmall = [-20 -10 -5 0]  % -20° to 0°
+Zero = [-5 0 5]             % -5° to 5°
+RightSmall = [0 5 10 20]    % 0° to 20°
+RightBig = [10 20 30 45]    % 10° to 45°
+
+% PWM Output (0-255)
+Stop = 0
+VeryLow = 64                % 25%
+Low = 102                   % 40%
+MediumLow = 128             % 50%
+Medium = 153                 % 60%
+MediumHigh = 179             % 70%
+High = 204                  % 80%
+VeryHigh = 230              % 90%
+Max = 255                   % 100%
