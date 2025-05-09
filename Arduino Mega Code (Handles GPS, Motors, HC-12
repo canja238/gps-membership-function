@@ -1,59 +1,57 @@
 #include <TinyGPS++.h>
 #include <SoftwareSerial.h>
 
-// GPS Module (NEO-M8N) - Using Serial1 (TX1=18, RX1=19)
+// GPS Module (NEO-M8N)
 TinyGPSPlus gps;
-#define GPS_SERIAL Serial1
+#define GPS_SERIAL Serial1  // TX1=18, RX1=19
 
-// HC-12 Wireless (Using Serial2 - TX2=16, RX2=17)
-#define HC12_SERIAL Serial2
+// HC-12 Wireless
+#define HC12_SERIAL Serial2 // TX2=16, RX2=17
 
-// Motor Control (L293D - Your Pinout)
-const int ENA = 12;   // Enable Motor A (PWM)
-const int ENB = 13;   // Enable Motor B (PWM)
-const int motorPin1 = 8;   // Motor A Direction 1
-const int motorPin2 = 9;   // Motor A Direction 2
-const int motorPin3 = 11;  // Motor B Direction 1
-const int motorPin4 = 10;  // Motor B Direction 2
+// Motor Control (L293D)
+const int ENA = 12;  // PWM Left
+const int ENB = 13;  // PWM Right
+const int motorPin1 = 8;   // Left Dir1
+const int motorPin2 = 9;   // Left Dir2
+const int motorPin3 = 11;  // Right Dir1
+const int motorPin4 = 10;  // Right Dir2
 
-// Waypoints (Latitude, Longitude)
+// Speed Parameters
+const float MAX_SPEED_MPS = 0.3333;  // Max linear speed (m/s)
+const float DELTA_T = 0.775;         // Control interval (s)
+
+// Waypoints (Lat, Lon)
 const double waypoints[][2] = {
-  {7.214941000, 124.249145000}, 
+  {7.214941000, 124.249145000},
   {7.214940679, 124.249146167},
-  // ... Add all waypoints
+  // Add all waypoints...
 };
 int currentWaypoint = 0;
 
-// Fuzzy Logic Variables (From Your Reference Code)
-double TMFCenter[] = {10, 50, 100};  // Near, Mid, Far (meters)
-double TMFWidth[] = {20, 40, 80};    // Widths
-double DOM[3];                       // Degree of Membership
-double motorSpeedLeft = 0, motorSpeedRight = 0;
-
 void setup() {
   Serial.begin(9600);
-  GPS_SERIAL.begin(9600);  // GPS Baud Rate
-  HC12_SERIAL.begin(9600); // HC-12 Baud Rate
+  GPS_SERIAL.begin(9600);
+  HC12_SERIAL.begin(9600);
 
-  // Initialize Motor Pins
+  // Initialize motor pins
   pinMode(ENA, OUTPUT);
   pinMode(ENB, OUTPUT);
   pinMode(motorPin1, OUTPUT);
   pinMode(motorPin2, OUTPUT);
   pinMode(motorPin3, OUTPUT);
   pinMode(motorPin4, OUTPUT);
-
-  // Stop Motors Initially
+  
+  // Stop motors initially
   analogWrite(ENA, 0);
   analogWrite(ENB, 0);
 }
 
 void loop() {
-  // Read GPS Data
+  // Read GPS data
   while (GPS_SERIAL.available() > 0) {
     if (gps.encode(GPS_SERIAL.read())) {
       if (gps.location.isUpdated()) {
-        // Send GPS Data to MATLAB via HC-12
+        // Send data to MATLAB: lat,lng,heading
         HC12_SERIAL.print(gps.location.lat(), 6);
         HC12_SERIAL.print(",");
         HC12_SERIAL.print(gps.location.lng(), 6);
@@ -63,65 +61,60 @@ void loop() {
     }
   }
 
-  // Check for Commands from MATLAB
+  // Check for MATLAB commands
   if (HC12_SERIAL.available() > 0) {
     String command = HC12_SERIAL.readStringUntil('\n');
     int comma1 = command.indexOf(',');
     int comma2 = command.indexOf(',', comma1 + 1);
     
-    motorSpeedLeft = command.substring(0, comma1).toInt();
-    motorSpeedRight = command.substring(comma1 + 1, comma2).toInt();
+    int pwm_left = command.substring(0, comma1).toInt();
+    int pwm_right = command.substring(comma1 + 1, comma2).toInt();
     int waypointReached = command.substring(comma2 + 1).toInt();
 
-    // Update Waypoint if Reached
+    // Update waypoint
     if (waypointReached == 1) {
       currentWaypoint++;
       if (currentWaypoint >= sizeof(waypoints) / sizeof(waypoints[0])) {
-        currentWaypoint = 0;  // Loop Path
+        currentWaypoint = 0;
       }
     }
 
-    // Drive Motors (From Your Reference Code)
-    if (motorSpeedLeft > 0) {
+    // Drive motors (with direction control)
+    if (pwm_left > 0) {
       digitalWrite(motorPin1, HIGH);
       digitalWrite(motorPin2, LOW);
-      analogWrite(ENA, motorSpeedLeft);
-    } else if (motorSpeedLeft < 0) {
+      analogWrite(ENA, pwm_left);
+    } else {
       digitalWrite(motorPin1, LOW);
       digitalWrite(motorPin2, HIGH);
-      analogWrite(ENA, -motorSpeedLeft);
-    } else {
-      analogWrite(ENA, 0);
+      analogWrite(ENA, -pwm_left);
     }
 
-    if (motorSpeedRight > 0) {
+    if (pwm_right > 0) {
       digitalWrite(motorPin3, HIGH);
       digitalWrite(motorPin4, LOW);
-      analogWrite(ENB, motorSpeedRight);
-    } else if (motorSpeedRight < 0) {
+      analogWrite(ENB, pwm_right);
+    } else {
       digitalWrite(motorPin3, LOW);
       digitalWrite(motorPin4, HIGH);
-      analogWrite(ENB, -motorSpeedRight);
-    } else {
-      analogWrite(ENB, 0);
+      analogWrite(ENB, -pwm_right);
     }
   }
 }
 
-// Distance Calculation (Haversine Formula - From Your Reference Code)
+// Convert m/s to PWM (0-255)
+int speedToPWM(float speed_mps) {
+  return constrain((speed_mps / MAX_SPEED_MPS) * 255, 0, 255);
+}
+
+// Haversine distance calculation (meters)
 double calculateDistance(double lat1, double lon1, double lat2, double lon2) {
-  const double earthRadius = 6371000;  // Earth radius in meters
-  double lat1Rad = radians(lat1);
-  double lon1Rad = radians(lon1);
-  double lat2Rad = radians(lat2);
-  double lon2Rad = radians(lon2);
-
-  double dlat = lat2Rad - lat1Rad;
-  double dlon = lon2Rad - lon1Rad;
-
-  double a = sin(dlat / 2) * sin(dlat / 2) +
-             cos(lat1Rad) * cos(lat2Rad) * sin(dlon / 2) * sin(dlon / 2);
-  double c = 2 * atan2(sqrt(a), sqrt(1 - a));
-
-  return earthRadius * c;
+  const double R = 6371000; // Earth radius in meters
+  double dLat = radians(lat2 - lat1);
+  double dLon = radians(lon2 - lon1);
+  double a = sin(dLat/2) * sin(dLat/2) +
+             cos(radians(lat1)) * cos(radians(lat2)) * 
+             sin(dLon/2) * sin(dLon/2);
+  double c = 2 * atan2(sqrt(a), sqrt(1-a));
+  return R * c;
 }
