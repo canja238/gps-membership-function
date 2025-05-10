@@ -1,68 +1,133 @@
 clear; clc;
 
 % Serial Port Setup
-hc12 = serialport("COM5", 9600); % Adjust COM port
+port = 'COM7'; % Adjust to your COM port
+baudrate = 9600;
+hc12 = serialport(port, baudrate);
 configureTerminator(hc12, "LF");
+flush(hc12);
 
 % Load Fuzzy Logic System
-fis = readfis('path_following.fis'); 
+fis = readfis('path_following.fis');
 
 % Waypoints (same as Arduino)
 waypoints = [
-    7.214941000, 124.249145000;
-    7.214940679, 124.249146167;
-    % Add all waypoints...
+  7.214941000, 124.249145000; 7.214940679, 124.249146167; 7.214940357, 124.249147333;
+  7.214940036, 124.249148500; 7.214939714, 124.249149667; 7.214939393, 124.249150833;
+  7.214939071, 124.249152000; 7.214938750, 124.249153167; 7.214938429, 124.249154333;
+  7.214938107, 124.249155500; 7.214937786, 124.249156667; 7.214937464, 124.249157833;
+  7.214937143, 124.249159000; 7.214936821, 124.249160167; 7.214936500, 124.249161333;
+  7.214936179, 124.249162500; 7.214935857, 124.249163667; 7.214935536, 124.249164833;
+  7.214935214, 124.249166000; 7.214934893, 124.249167167; 7.214934571, 124.249168333;
+  7.214934250, 124.249169500; 7.214933929, 124.249170667; 7.214933607, 124.249171833;
+  7.214933286, 124.249173000; 7.214932964, 124.249174167; 7.214932643, 124.249175333;
+  7.214932321, 124.249176500; 7.214932000, 124.249177667; 7.214931679, 124.249178833;
+  7.214931357, 124.249180000; 7.214931036, 124.249181167; 7.214930714, 124.249182333;
+  7.214930393, 124.249183500; 7.214930071, 124.249184667; 7.214929750, 124.249185833;
+  7.214929429, 124.249187000; 7.214929107, 124.249188167; 7.214928786, 124.249189333;
+  7.214928464, 124.249190500; 7.214928143, 124.249191667; 7.214927821, 124.249192833;
+  7.214927500, 124.249194000; 7.214927179, 124.249195167; 7.214926857, 124.249196333;
+  7.214926536, 124.249197500; 7.214926214, 124.249198667; 7.214925893, 124.249199833;
+  7.214925571, 124.249201000; 7.214925250, 124.249202167; 7.214924929, 124.249203333;
+  7.214924607, 124.249204500; 7.214924286, 124.249205667; 7.214923964, 124.249206833;
+  7.214923643, 124.249208000; 7.214923321, 124.249209167; 7.214923000, 124.249210333;
+  7.214922679, 124.249211500; 7.214922357, 124.249212667; 7.214922036, 124.249213833;
+  7.214921714, 124.249215000; 7.214921393, 124.249216167; 7.214921071, 124.249217333;
+  7.214920750, 124.249218500; 7.214920429, 124.249219667; 7.214920107, 124.249220833;
+  7.214919786, 124.249222000; 7.214919464, 124.249223167; 7.214919143, 124.249224333;
+  7.214918821, 124.249225500; 7.214918500, 124.249226667; 7.214918179, 124.249227833;
+  7.214917857, 124.249229000; 7.214917536, 124.249230167; 7.214917214, 124.249231333;
+  7.214916893, 124.249232500; 7.214916571, 124.249233667; 7.214916250, 124.249234833;
+  7.214915929, 124.249236000; 7.214915607, 124.249237167; 7.214915286, 124.249238333;
+  7.214914964, 124.249239500; 7.214914643, 124.249240667; 7.214914321, 124.249241833;
+  7.214914000, 124.249243000
 ];
 currentWaypoint = 1;
 
-% Speed Parameters
-max_speed_mps = 0.3333;  % 100% speed
-deltaT = 0.775;          % Control interval
+% Control Parameters
+MAX_SPEED_MPS = 0.3333;  % m/s
+WAYPOINT_TOLERANCE = 5.0; % meters
+TIMEOUT_SECONDS = 2.0;
 
+% Initialize variables
+lastValidTime = now;
+pwm_left = 0;
+pwm_right = 0;
+
+% Main control loop
 while true
-    % Read GPS data from Arduino
-    data = readline(hc12);
-    values = strsplit(data, ',');
-    
-    if numel(values) >= 3
-        lat = str2double(values(1));
-        lng = str2double(values(2));
-        heading = str2double(values(3));
-        
-        % Calculate errors
-        target_lat = waypoints(currentWaypoint, 1);
-        target_lng = waypoints(currentWaypoint, 2);
-        
-        distance_error = deg2km(distance(lat,lng,target_lat,target_lng)) * 1000;
-        target_heading = atan2d(sin(target_lng-lng)*cos(target_lat), ...
-                             cos(lat)*sin(target_lat) - sin(lat)*cos(target_lat)*cos(target_lng-lng));
-        heading_error = wrapTo180(target_heading - heading);
-        
-        % Fuzzy Logic Evaluation
-        pwm_output = evalfis(fis, [distance_error, heading_error]);
-        
-        % Scale to actual speeds (m/s)
-        speed_left = (pwm_output(1)/255) * max_speed_mps;
-        speed_right = (pwm_output(2)/255) * max_speed_mps;
-        
-        % Convert back to PWM (for Arduino)
-        pwm_left = round((speed_left / max_speed_mps) * 255);
-        pwm_right = round((speed_right / max_speed_mps) * 255);
-        
-        % Check waypoint reached (using 50% speed travel distance)
-        waypointReached = 0;
-        if distance_error < (0.16665 * deltaT) % 50% speed × deltaT
-            waypointReached = 1;
-            currentWaypoint = currentWaypoint + 1;
-            if currentWaypoint > size(waypoints, 1)
-                currentWaypoint = 1;
+    try
+        % Read GPS data from Arduino
+        if hc12.NumBytesAvailable > 0
+            data = readline(hc12);
+            values = strsplit(strtrim(data), ',');
+            
+            if numel(values) == 3
+                lastValidTime = now;
+                
+                % Parse values
+                lat = str2double(values{1});
+                lng = str2double(values{2});
+                heading = str2double(values{3});
+                
+                % Calculate errors
+                target_lat = waypoints(currentWaypoint, 1);
+                target_lng = waypoints(currentWaypoint, 2);
+                
+                distance_error = deg2km(distance(lat,lng,target_lat,target_lng)) * 1000;
+                target_heading = atan2d(sin(deg2rad(target_lng-lng))*cos(deg2rad(target_lat)), ...
+                                 cos(deg2rad(lat))*sin(deg2rad(target_lat)) - sin(deg2rad(lat))*cos(deg2rad(target_lat))*cos(deg2rad(target_lng-lng)));
+                heading_error = wrapTo180(target_heading - heading);
+                
+                % Fuzzy Logic Evaluation
+                pwm_output = evalfis(fis, [distance_error, heading_error]);
+                pwm_left = round(pwm_output(1));
+                pwm_right = round(pwm_output(2));
+                
+                % Check waypoint reached
+                waypointReached = 0;
+                if distance_error < WAYPOINT_TOLERANCE
+                    waypointReached = 1;
+                    currentWaypoint = currentWaypoint + 1;
+                    if currentWaypoint > size(waypoints, 1)
+                        currentWaypoint = 1;
+                    end
+                end
+                
+                % Send to Arduino
+                writeline(hc12, sprintf('%d,%d,%d', pwm_left, pwm_right, waypointReached));
             end
         end
         
-        % Send to Arduino
-        writeline(hc12, sprintf('%d,%d,%d', pwm_left, pwm_right, waypointReached));
+        % Check for timeout
+        if seconds(now - lastValidTime) > TIMEOUT_SECONDS
+            warning('No valid data received for %.1f seconds', TIMEOUT_SECONDS);
+            % Send stop command
+            writeline(hc12, '0,0,0');
+            lastValidTime = now;
+        end
+        
+        % Small delay to prevent CPU overload
+        pause(0.05);
+        
+    catch ME
+        warning('Error in control loop: %s', ME.message);
+        % Attempt to reconnect
+        try
+            delete(hc12);
+            hc12 = serialport(port, baudrate);
+            configureTerminator(hc12, "LF");
+            flush(hc12);
+            lastValidTime = now;
+        catch
+            error('Failed to reconnect to serial port');
+        end
     end
 end
+
+% Cleanup on exit
+delete(hc12);
+clear hc12;
 
 % Distance calculation (Haversine)
 function dist = distance(lat1, lon1, lat2, lon2)
@@ -71,5 +136,5 @@ function dist = distance(lat1, lon1, lat2, lon2)
     dLon = deg2rad(lon2-lon1);
     a = sin(dLat/2)^2 + cos(deg2rad(lat1))*cos(deg2rad(lat2))*sin(dLon/2)^2;
     c = 2 * atan2(sqrt(a), sqrt(1-a));
-    dist = R * c;
+    dist = R * c; % Distance in km
 end
