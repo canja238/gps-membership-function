@@ -1,6 +1,9 @@
 #include <TinyGPS++.h>
 #include <SoftwareSerial.h>
 
+// Debug Mode (comment out for deployment)
+#define DEBUG
+
 // GPS Module (NEO-M8N)
 TinyGPSPlus gps;
 #define GPS_SERIAL Serial1  // TX1=18, RX1=19
@@ -16,20 +19,35 @@ const int motorPin2 = 9;   // Left Dir2
 const int motorPin3 = 11;  // Right Dir1
 const int motorPin4 = 10;  // Right Dir2
 
-// Speed Parameters
+// System Parameters
 const float MAX_SPEED_MPS = 0.3333;  // Max linear speed (m/s)
-const float DELTA_T = 0.775;         // Control interval (s)
+const unsigned long MOTOR_TIMEOUT_MS = 1000;  // Safety timeout
+const float WAYPOINT_TOLERANCE = 5.0;  // meters (sync with MATLAB)
 
-// Waypoints (Lat, Lon)
+// Navigation
 const double waypoints[][2] = {
   {7.214941000, 124.249145000},
   {7.214940679, 124.249146167},
   // Add all waypoints...
 };
 int currentWaypoint = 0;
+unsigned long lastCommandTime = 0;
+
+// Debug Macros
+#ifdef DEBUG
+#define DEBUG_PRINT(x) Serial.print(x)
+#define DEBUG_PRINTLN(x) Serial.println(x)
+#else
+#define DEBUG_PRINT(x)
+#define DEBUG_PRINTLN(x)
+#endif
 
 void setup() {
+  #ifdef DEBUG
   Serial.begin(9600);
+  DEBUG_PRINTLN("System Initializing...");
+  #endif
+
   GPS_SERIAL.begin(9600);
   HC12_SERIAL.begin(9600);
 
@@ -42,72 +60,108 @@ void setup() {
   pinMode(motorPin4, OUTPUT);
   
   // Stop motors initially
-  analogWrite(ENA, 0);
-  analogWrite(ENB, 0);
+  stopMotors();
+  DEBUG_PRINTLN("Initialization Complete");
 }
 
 void loop() {
-  // Read GPS data
+  // 1. GPS Data Handling
   while (GPS_SERIAL.available() > 0) {
     if (gps.encode(GPS_SERIAL.read())) {
       if (gps.location.isUpdated()) {
         // Send data to MATLAB: lat,lng,heading
-        HC12_SERIAL.print(gps.location.lat(), 6);
+        HC12_SERIAL.print(gps.location.lat(), 9);
         HC12_SERIAL.print(",");
-        HC12_SERIAL.print(gps.location.lng(), 6);
+        HC12_SERIAL.print(gps.location.lng(), 9);
         HC12_SERIAL.print(",");
         HC12_SERIAL.println(gps.course.deg());
+        
+        #ifdef DEBUG
+        DEBUG_PRINT("Position: ");
+        DEBUG_PRINT(gps.location.lat(), 9);
+        DEBUG_PRINT(", ");
+        DEBUG_PRINT(gps.location.lng(), 9);
+        DEBUG_PRINT(", Heading: ");
+        DEBUG_PRINTLN(gps.course.deg());
+        #endif
       }
     }
   }
 
-  // Check for MATLAB commands
+  // 2. Motor Command Handling
   if (HC12_SERIAL.available() > 0) {
     String command = HC12_SERIAL.readStringUntil('\n');
+    command.trim();
+    
     int comma1 = command.indexOf(',');
     int comma2 = command.indexOf(',', comma1 + 1);
     
-    int pwm_left = command.substring(0, comma1).toInt();
-    int pwm_right = command.substring(comma1 + 1, comma2).toInt();
-    int waypointReached = command.substring(comma2 + 1).toInt();
+    if (comma1 > 0 && comma2 > comma1) {
+      lastCommandTime = millis();
+      
+      int pwm_left = command.substring(0, comma1).toInt();
+      int pwm_right = command.substring(comma1 + 1, comma2).toInt();
+      int waypointReached = command.substring(comma2 + 1).toInt();
 
-    // Update waypoint
-    if (waypointReached == 1) {
-      currentWaypoint++;
-      if (currentWaypoint >= sizeof(waypoints) / sizeof(waypoints[0])) {
-        currentWaypoint = 0;
+      // Update waypoint
+      if (waypointReached == 1) {
+        currentWaypoint++;
+        if (currentWaypoint >= sizeof(waypoints) / sizeof(waypoints[0])) {
+          currentWaypoint = 0;
+        }
+        DEBUG_PRINT("New Waypoint: ");
+        DEBUG_PRINTLN(currentWaypoint);
       }
-    }
 
-    // Drive motors (with direction control)
-    if (pwm_left > 0) {
-      digitalWrite(motorPin1, HIGH);
-      digitalWrite(motorPin2, LOW);
-      analogWrite(ENA, pwm_left);
-    } else {
-      digitalWrite(motorPin1, LOW);
-      digitalWrite(motorPin2, HIGH);
-      analogWrite(ENA, -pwm_left);
+      // Drive motors
+      setMotorSpeeds(pwm_left, pwm_right);
     }
+  }
 
-    if (pwm_right > 0) {
-      digitalWrite(motorPin3, HIGH);
-      digitalWrite(motorPin4, LOW);
-      analogWrite(ENB, pwm_right);
-    } else {
-      digitalWrite(motorPin3, LOW);
-      digitalWrite(motorPin4, HIGH);
-      analogWrite(ENB, -pwm_right);
+  // 3. Safety Check
+  if (millis() - lastCommandTime > MOTOR_TIMEOUT_MS) {
+    stopMotors();
+    #ifdef DEBUG
+    if (millis() % 2000 < 100) {  // Blink warning
+      DEBUG_PRINTLN("WARNING: Motor timeout - No commands received");
     }
+    #endif
   }
 }
 
-// Convert m/s to PWM (0-255)
-int speedToPWM(float speed_mps) {
-  return constrain((speed_mps / MAX_SPEED_MPS) * 255, 0, 255);
+void setMotorSpeeds(int left, int right) {
+  // Left Motor
+  if (left > 0) {
+    digitalWrite(motorPin1, HIGH);
+    digitalWrite(motorPin2, LOW);
+    analogWrite(ENA, constrain(abs(left), 0, 255));
+  } else {
+    digitalWrite(motorPin1, LOW);
+    digitalWrite(motorPin2, HIGH);
+    analogWrite(ENA, constrain(abs(left), 0, 255));
+  }
+
+  // Right Motor
+  if (right > 0) {
+    digitalWrite(motorPin3, HIGH);
+    digitalWrite(motorPin4, LOW);
+    analogWrite(ENB, constrain(abs(right), 0, 255));
+  } else {
+    digitalWrite(motorPin3, LOW);
+    digitalWrite(motorPin4, HIGH);
+    analogWrite(ENB, constrain(abs(right), 0, 255));
+  }
 }
 
-// Haversine distance calculation (meters)
+void stopMotors() {
+  analogWrite(ENA, 0);
+  analogWrite(ENB, 0);
+  digitalWrite(motorPin1, LOW);
+  digitalWrite(motorPin2, LOW);
+  digitalWrite(motorPin3, LOW);
+  digitalWrite(motorPin4, LOW);
+}
+
 double calculateDistance(double lat1, double lon1, double lat2, double lon2) {
   const double R = 6371000; // Earth radius in meters
   double dLat = radians(lat2 - lat1);
