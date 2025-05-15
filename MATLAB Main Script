@@ -1,18 +1,17 @@
-clear; clc;
-
-% Serial Port Setup
-port = 'COM7'; % Adjust to your COM port
-baudrate = 9600;
-hc12 = serialport(port, baudrate);
-configureTerminator(hc12, "LF");
-flush(hc12);
-
-% Load Fuzzy Logic System
-fis = readfis('path_following.fis');
-
-% Waypoints (same as Arduino)
-waypoints = [
-  7.214941000, 124.249145000; 7.214940679, 124.249146167; 7.214940357, 124.249147333;
+function gps_navigation_controller()
+    % Clear workspace and close all figures
+    clear; clc; close all;
+    
+    % Serial Port Configuration
+    port = 'COM7'; % Adjust to your COM port
+    baudrate = 9600;
+    
+    % Load Fuzzy Logic System
+    fis = readfis('path_following.fis');
+    
+    % Waypoints (same as Arduino)
+    waypoints = [
+         7.214941000, 124.249145000; 7.214940679, 124.249146167; 7.214940357, 124.249147333;
   7.214940036, 124.249148500; 7.214939714, 124.249149667; 7.214939393, 124.249150833;
   7.214939071, 124.249152000; 7.214938750, 124.249153167; 7.214938429, 124.249154333;
   7.214938107, 124.249155500; 7.214937786, 124.249156667; 7.214937464, 124.249157833;
@@ -41,95 +40,202 @@ waypoints = [
   7.214915929, 124.249236000; 7.214915607, 124.249237167; 7.214915286, 124.249238333;
   7.214914964, 124.249239500; 7.214914643, 124.249240667; 7.214914321, 124.249241833;
   7.214914000, 124.249243000
-];
-currentWaypoint = 1;
-
-% Control Parameters
-MAX_SPEED_MPS = 0.3333;  % m/s
-WAYPOINT_TOLERANCE = 5.0; % meters
-TIMEOUT_SECONDS = 2.0;
-
-% Initialize variables
-lastValidTime = now;
-pwm_left = 0;
-pwm_right = 0;
-
-% Main control loop
-while true
+    ];
+    
+    % System Parameters
+    WAYPOINT_TOLERANCE = 5.0; % meters
+    TIMEOUT_SECONDS = 2.0;
+    MAX_SPEED_MPS = 0.3333;  % m/s
+    
+    % Initialize Serial Connection
     try
-        % Read GPS data from Arduino
-        if hc12.NumBytesAvailable > 0
-            data = readline(hc12);
-            values = strsplit(strtrim(data), ',');
+        hc12 = serialport(port, baudrate);
+        configureTerminator(hc12, "LF");
+        flush(hc12);
+    catch ME
+        error('Failed to initialize serial port: %s', ME.message);
+    end
+    
+    % Initialize Navigation Variables
+    currentWaypoint = 1;
+    lastValidTime = datetime('now');
+    logFile = initializeDataLog();
+    
+    % Create Visualization
+    [hFig, hRobot, hPath, hTarget] = initializeVisualization(waypoints);
+    
+    % Main Control Loop
+    try
+        while ishandle(hFig)
+            loopStart = tic;
             
-            if numel(values) == 3
-                lastValidTime = now;
+            % 1. Data Acquisition
+            [gpsData, status] = readGPSData(hc12);
+            
+            if status.success
+                lastValidTime = datetime('now');
                 
-                % Parse values
-                lat = str2double(values{1});
-                lng = str2double(values{2});
-                heading = str2double(values{3});
+                % 2. Navigation Calculation
+                [pwm_left, pwm_right, wp_reached] = calculateNavigation(...
+                    gpsData, waypoints, currentWaypoint, fis, WAYPOINT_TOLERANCE);
                 
-                % Calculate errors
-                target_lat = waypoints(currentWaypoint, 1);
-                target_lng = waypoints(currentWaypoint, 2);
-                
-                distance_error = deg2km(distance(lat,lng,target_lat,target_lng)) * 1000;
-                target_heading = atan2d(sin(deg2rad(target_lng-lng))*cos(deg2rad(target_lat)), ...
-                                 cos(deg2rad(lat))*sin(deg2rad(target_lat)) - sin(deg2rad(lat))*cos(deg2rad(target_lat))*cos(deg2rad(target_lng-lng)));
-                heading_error = wrapTo180(target_heading - heading);
-                
-                % Fuzzy Logic Evaluation
-                pwm_output = evalfis(fis, [distance_error, heading_error]);
-                pwm_left = round(pwm_output(1));
-                pwm_right = round(pwm_output(2));
-                
-                % Check waypoint reached
-                waypointReached = 0;
-                if distance_error < WAYPOINT_TOLERANCE
-                    waypointReached = 1;
-                    currentWaypoint = currentWaypoint + 1;
-                    if currentWaypoint > size(waypoints, 1)
-                        currentWaypoint = 1;
-                    end
+                % 3. Waypoint Management
+                if wp_reached
+                    currentWaypoint = mod(currentWaypoint, size(waypoints,1)) + 1;
+                    fprintf('Waypoint reached! Next: %d\n', currentWaypoint);
                 end
                 
-                % Send to Arduino
-                writeline(hc12, sprintf('%d,%d,%d', pwm_left, pwm_right, waypointReached));
+                % 4. Actuation
+                sendMotorCommand(hc12, pwm_left, pwm_right, wp_reached);
+                
+                % 5. Visualization Update
+                updateVisualization(hRobot, hTarget, gpsData, waypoints, currentWaypoint);
+                
+                % 6. Data Logging
+                logNavigationData(logFile, gpsData, waypoints(currentWaypoint,:), ...
+                    [pwm_left, pwm_right], wp_reached);
+            else
+                % Handle timeout
+                if seconds(datetime('now') - lastValidTime) > TIMEOUT_SECONDS
+                    warning('No valid data for %.1f seconds. Stopping motors.', TIMEOUT_SECONDS);
+                    sendMotorCommand(hc12, 0, 0, 0);
+                    lastValidTime = datetime('now');
+                end
             end
+            
+            % Loop timing control
+            loopTime = toc(loopStart);
+            pause(max(0.05 - loopTime, 0)); % Maintain ~20Hz
         end
-        
-        % Check for timeout
-        if seconds(now - lastValidTime) > TIMEOUT_SECONDS
-            warning('No valid data received for %.1f seconds', TIMEOUT_SECONDS);
-            % Send stop command
-            writeline(hc12, '0,0,0');
-            lastValidTime = now;
-        end
-        
-        % Small delay to prevent CPU overload
-        pause(0.05);
-        
     catch ME
-        warning('Error in control loop: %s', ME.message);
-        % Attempt to reconnect
+        handleError(ME, hc12);
+    end
+    
+    % Cleanup
+    cleanup(hc12, logFile);
+end
+
+%% Helper Functions
+function [hFig, hRobot, hPath, hTarget] = initializeVisualization(waypoints)
+    hFig = figure('Name', 'GPS Navigation Controller', 'NumberTitle', 'off');
+    hPath = plot(waypoints(:,2), waypoints(:,1), 'b-o', 'LineWidth', 1.5);
+    hold on;
+    hRobot = plot(nan, nan, 'ro', 'MarkerSize', 10, 'MarkerFaceColor', 'r');
+    hTarget = plot(waypoints(1,2), waypoints(1,1), 'gx', 'MarkerSize', 15, 'LineWidth', 2);
+    xlabel('Longitude');
+    ylabel('Latitude');
+    title('Real-time Robot Navigation');
+    grid on;
+    axis equal;
+    legend('Path', 'Robot', 'Target', 'Location', 'best');
+end
+
+function logFile = initializeDataLog()
+    logFile = sprintf('navlog_%s.csv', datestr(now, 'yyyymmdd_HHMMSS'));
+    fid = fopen(logFile, 'w');
+    fprintf(fid, 'Timestamp,Lat,Lng,Heading,TargetLat,TargetLng,DistanceError,HeadingError,PWM_L,PWM_R,WaypointReached\n');
+    fclose(fid);
+end
+
+function [data, status] = readGPSData(hc12)
+    status.success = false;
+    data = struct('lat', nan, 'lng', nan, 'heading', nan);
+    
+    if hc12.NumBytesAvailable > 0
         try
-            delete(hc12);
-            hc12 = serialport(port, baudrate);
-            configureTerminator(hc12, "LF");
-            flush(hc12);
-            lastValidTime = now;
+            raw = readline(hc12);
+            values = strsplit(strtrim(raw), ',');
+            
+            if numel(values) == 3
+                data.lat = str2double(values{1});
+                data.lng = str2double(values{2});
+                data.heading = str2double(values{3});
+                status.success = true;
+            end
         catch
-            error('Failed to reconnect to serial port');
+            % Silently handle read errors
         end
     end
 end
 
-% Cleanup on exit
-delete(hc12);
-clear hc12;
+function [pwm_left, pwm_right, wp_reached] = calculateNavigation(...
+        gpsData, waypoints, currentWP, fis, tolerance)
+    
+    target = waypoints(currentWP,:);
+    
+    % Calculate distance error (meters)
+    distance_error = deg2km(distance(gpsData.lat, gpsData.lng, target(1), target(2))) * 1000;
+    
+    % Calculate heading error (degrees)
+    target_heading = atan2d(sin(deg2rad(target(2)-gpsData.lng))*cos(deg2rad(target(1)), ...
+                     cos(deg2rad(gpsData.lat))*sin(deg2rad(target(1))) - ...
+                     sin(deg2rad(gpsData.lat))*cos(deg2rad(target(1)))*cos(deg2rad(target(2)-gpsData.lng)));
+    heading_error = wrapTo180(target_heading - gpsData.heading);
+    
+    % Fuzzy Logic Control
+    pwm_output = evalfis(fis, [distance_error, heading_error]);
+    pwm_left = round(pwm_output(1));
+    pwm_right = round(pwm_output(2));
+    
+    % Waypoint check
+    wp_reached = distance_error < tolerance;
+end
 
-% Distance calculation (Haversine)
+function sendMotorCommand(hc12, pwm_l, pwm_r, wp_reached)
+    command = sprintf('%d,%d,%d', pwm_l, pwm_r, wp_reached);
+    writeline(hc12, command);
+end
+
+function updateVisualization(hRobot, hTarget, gpsData, waypoints, currentWP)
+    set(hRobot, 'XData', gpsData.lng, 'YData', gpsData.lat);
+    set(hTarget, 'XData', waypoints(currentWP,2), 'YData', waypoints(currentWP,1));
+    drawnow limitrate;
+end
+
+function logNavigationData(logFile, gpsData, targetWP, pwm, wp_reached)
+    fid = fopen(logFile, 'a');
+    fprintf(fid, '%s,%.9f,%.9f,%.3f,%.9f,%.9f,%.3f,%.3f,%d,%d,%d\n',...
+            datestr(now, 'yyyy-mm-dd HH:MM:SS.FFF'),...
+            gpsData.lat, gpsData.lng, gpsData.heading,...
+            targetWP(1), targetWP(2),...
+            pwm(1), pwm(2),...
+            wp_reached);
+    fclose(fid);
+end
+
+function handleError(ME, hc12)
+    fprintf('Error occurred:\n');
+    fprintf('Message: %s\n', ME.message);
+    for k = 1:length(ME.stack)
+        fprintf('File: %s\nLine: %d\nFunction: %s\n\n',...
+                ME.stack(k).file,...
+                ME.stack(k).line,...
+                ME.stack(k).name);
+    end
+    
+    % Emergency stop
+    try
+        writeline(hc12, '0,0,0');
+    catch
+        fprintf('Failed to send stop command\n');
+    end
+end
+
+function cleanup(hc12, logFile)
+    fprintf('Closing serial connection and log file...\n');
+    try
+        writeline(hc12, '0,0,0');
+        delete(hc12);
+        clear hc12;
+    catch
+        fprintf('Error closing serial port\n');
+    end
+    
+    if exist(logFile, 'file')
+        fprintf('Data logged to: %s\n', logFile);
+    end
+end
+
 function dist = distance(lat1, lon1, lat2, lon2)
     R = 6371; % Earth radius in km
     dLat = deg2rad(lat2-lat1);
