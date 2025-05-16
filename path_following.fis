@@ -1,0 +1,51 @@
+fis = mamfis('Name', 'path_following');
+
+% Input 1: Distance Error (0-20m)
+fis = addInput(fis, [0 20], 'Name', 'distance_error');
+fis = addMF(fis, 'distance_error', 'zmf', [0 3], 'Name', 'near');       % 0-3m
+fis = addMF(fis, 'distance_error', 'trimf', [2 8 15], 'Name', 'medium'); % 2-15m
+fis = addMF(fis, 'distance_error', 'smf', [10 20], 'Name', 'far');      % 10-20m+
+
+% Input 2: Heading Error (-180° to 180°)
+fis = addInput(fis, [-180 180], 'Name', 'heading_error');
+fis = addMF(fis, 'heading_error', 'zmf', [-180 -30], 'Name', 'left');   % Left of target
+fis = addMF(fis, 'heading_error', 'trimf', [-45 0 45], 'Name', 'straight'); % Aligned (±45°)
+fis = addMF(fis, 'heading_error', 'smf', [30 180], 'Name', 'right');    % Right of target
+
+% Outputs: PWM for left/right motors (-255 to 255)
+fis = addOutput(fis, [-255 255], 'Name', 'pwm_left');
+fis = addMF(fis, 'pwm_left', 'constant', -150, 'Name', 'reverse');
+fis = addMF(fis, 'pwm_left', 'constant', 0, 'Name', 'stop');
+fis = addMF(fis, 'pwm_left', 'constant', 150, 'Name', 'forward');
+
+fis = addOutput(fis, [-255 255], 'Name', 'pwm_right');
+fis = addMF(fis, 'pwm_right', 'constant', -150, 'Name', 'reverse');
+fis = addMF(fis, 'pwm_right', 'constant', 0, 'Name', 'stop');
+fis = addMF(fis, 'pwm_right', 'constant', 150, 'Name', 'forward');
+
+% Rule Base (3×3 = 9 rules)
+rules = [
+    % Near + Left: Stop (avoid overshoot)
+    1 1 2 2 1 1 1
+    % Near + Straight: Slow forward
+    1 2 3 3 1 1 1
+    % Near + Right: Stop
+    1 3 2 2 1 1 1
+
+    % Medium + Left: Turn right (left motor forward, right reverse)
+    2 1 3 1 1 1 1
+    % Medium + Straight: Full forward
+    2 2 3 3 1 1 1
+    % Medium + Right: Turn left (left motor reverse, right forward)
+    2 3 1 3 1 1 1
+
+    % Far + Left: Sharp right turn
+    3 1 3 1 1 1 1
+    % Far + Straight: Full speed ahead
+    3 2 3 3 1 1 1
+    % Far + Right: Sharp left turn
+    3 3 1 3 1 1 1
+];
+
+fis = addRule(fis, rules);
+writeFIS(fis, 'path_following');
