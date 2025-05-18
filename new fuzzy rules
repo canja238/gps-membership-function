@@ -1,0 +1,152 @@
+Name: 'distance_error'
+Range: [0 5]  % 0 to 5 meters
+MFs:
+1. Name: 'VeryClose'   Type: 'trimf'  Params: [0    0    1.25]
+2. Name: 'Close'       Type: 'trimf'  Params: [0.5  1.5  2.5]
+3. Name: 'Medium'      Type: 'trimf'  Params: [1.5  2.5  3.5]
+4. Name: 'Far'         Type: 'trimf'  Params: [2.5  3.5  4.5]
+5. Name: 'VeryFar'     Type: 'trimf'  Params: [3.5  5    5]
+
+
+Name: 'heading_error'
+Range: [-180 180]  % -180° to 180°
+MFs:
+1. Name: 'LeftSharp'   Type: 'trimf'  Params: [-180 -180 -90]
+2. Name: 'LeftMod'     Type: 'trimf'  Params: [-135 -45  0]
+3. Name: 'Aligned'     Type: 'trimf'  Params: [-30   0    30]
+4. Name: 'RightMod'    Type: 'trimf'  Params: [0    45   135]
+5. Name: 'RightSharp'  Type: 'trimf'  Params: [90   180  180]
+
+Name: 'pwm_left'
+Range: [-100 100]  % -100% to 100%
+MFs:
+1. Name: 'RevFull'     Type: 'trimf'  Params: [-100 -100 -50]
+2. Name: 'RevMed'      Type: 'trimf'  Params: [-75  -50  -25]
+3. Name: 'Slow'        Type: 'trimf'  Params: [-40  -20   0]
+4. Name: 'Zero'        Type: 'trimf'  Params: [-10   0    10]
+5. Name: 'Creep'       Type: 'trimf'  Params: [0    20   40]
+6. Name: 'FwdMed'      Type: 'trimf'  Params: [25   50   75]
+7. Name: 'FwdFull'     Type: 'trimf'  Params: [50   100  100]
+
+
+Name: 'pwm_right'
+Range: [-100 100]  % Same as pwm_left
+MFs: (Same as pwm_left)
+
+
+1.  If (distance_error is VeryClose) and (heading_error is LeftSharp) then (pwm_left is RevMed) (pwm_right is FwdMed)
+2.  If (distance_error is VeryClose) and (heading_error is LeftMod) then (pwm_left is Slow) (pwm_right is Creep)
+3.  If (distance_error is VeryClose) and (heading_error is Aligned) then (pwm_left is Zero) (pwm_right is Zero)
+4.  If (distance_error is VeryClose) and (heading_error is RightMod) then (pwm_left is Creep) (pwm_right is Slow)
+5.  If (distance_error is VeryClose) and (heading_error is RightSharp) then (pwm_left is FwdMed) (pwm_right is RevMed)
+
+6.  If (distance_error is Close) and (heading_error is LeftSharp) then (pwm_left is RevMed) (pwm_right is FwdFull)
+7.  If (distance_error is Close) and (heading_error is LeftMod) then (pwm_left is Slow) (pwm_right is FwdMed)
+8.  If (distance_error is Close) and (heading_error is Aligned) then (pwm_left is Creep) (pwm_right is Creep)
+9.  If (distance_error is Close) and (heading_error is RightMod) then (pwm_left is FwdMed) (pwm_right is Slow)
+10. If (distance_error is Close) and (heading_error is RightSharp) then (pwm_left is FwdFull) (pwm_right is RevMed)
+
+11. If (distance_error is Medium) and (heading_error is LeftSharp) then (pwm_left is RevFull) (pwm_right is FwdFull)
+12. If (distance_error is Medium) and (heading_error is LeftMod) then (pwm_left is RevMed) (pwm_right is FwdFull)
+13. If (distance_error is Medium) and (heading_error is Aligned) then (pwm_left is FwdMed) (pwm_right is FwdMed)
+14. If (distance_error is Medium) and (heading_error is RightMod) then (pwm_left is FwdFull) (pwm_right is RevMed)
+15. If (distance_error is Medium) and (heading_error is RightSharp) then (pwm_left is FwdFull) (pwm_right is RevFull)
+
+16. If (distance_error is Far) and (heading_error is LeftSharp) then (pwm_left is RevFull) (pwm_right is FwdFull)
+17. If (distance_error is Far) and (heading_error is LeftMod) then (pwm_left is RevMed) (pwm_right is FwdFull)
+18. If (distance_error is Far) and (heading_error is Aligned) then (pwm_left is FwdFull) (pwm_right is FwdFull)
+19. If (distance_error is Far) and (heading_error is RightMod) then (pwm_left is FwdFull) (pwm_right is RevMed)
+20. If (distance_error is Far) and (heading_error is RightSharp) then (pwm_left is FwdFull) (pwm_right is RevFull)
+
+21. If (distance_error is VeryFar) and (heading_error is LeftSharp) then (pwm_left is RevFull) (pwm_right is FwdFull)
+22. If (distance_error is VeryFar) and (heading_error is LeftMod) then (pwm_left is RevMed) (pwm_right is FwdFull)
+23. If (distance_error is VeryFar) and (heading_error is Aligned) then (pwm_left is FwdFull) (pwm_right is FwdFull)
+24. If (distance_error is VeryFar) and (heading_error is RightMod) then (pwm_left is FwdFull) (pwm_right is RevMed)
+25. If (distance_error is VeryFar) and (heading_error is RightSharp) then (pwm_left is FwdFull) (pwm_right is RevFull)
+
+
+function create_fuzzy_controller()
+    % Create new FIS
+    fis = newfis('path_following');
+    
+    % Add distance_error input
+    fis = addvar(fis, 'input', 'distance_error', [0 5]);
+    fis = addmf(fis, 'input', 1, 'VeryClose', 'trimf', [0 0 1.25]);
+    fis = addmf(fis, 'input', 1, 'Close', 'trimf', [0.5 1.5 2.5]);
+    fis = addmf(fis, 'input', 1, 'Medium', 'trimf', [1.5 2.5 3.5]);
+    fis = addmf(fis, 'input', 1, 'Far', 'trimf', [2.5 3.5 4.5]);
+    fis = addmf(fis, 'input', 1, 'VeryFar', 'trimf', [3.5 5 5]);
+    
+    % Add heading_error input
+    fis = addvar(fis, 'input', 'heading_error', [-180 180]);
+    fis = addmf(fis, 'input', 2, 'LeftSharp', 'trimf', [-180 -180 -90]);
+    fis = addmf(fis, 'input', 2, 'LeftMod', 'trimf', [-135 -45 0]);
+    fis = addmf(fis, 'input', 2, 'Aligned', 'trimf', [-30 0 30]);
+    fis = addmf(fis, 'input', 2, 'RightMod', 'trimf', [0 45 135]);
+    fis = addmf(fis, 'input', 2, 'RightSharp', 'trimf', [90 180 180]);
+    
+    % Add pwm_left output
+    fis = addvar(fis, 'output', 'pwm_left', [-100 100]);
+    fis = addmf(fis, 'output', 1, 'RevFull', 'trimf', [-100 -100 -50]);
+    fis = addmf(fis, 'output', 1, 'RevMed', 'trimf', [-75 -50 -25]);
+    fis = addmf(fis, 'output', 1, 'Slow', 'trimf', [-40 -20 0]);
+    fis = addmf(fis, 'output', 1, 'Zero', 'trimf', [-10 0 10]);
+    fis = addmf(fis, 'output', 1, 'Creep', 'trimf', [0 20 40]);
+    fis = addmf(fis, 'output', 1, 'FwdMed', 'trimf', [25 50 75]);
+    fis = addmf(fis, 'output', 1, 'FwdFull', 'trimf', [50 100 100]);
+    
+    % Add pwm_right output (same as pwm_left)
+    fis = addvar(fis, 'output', 'pwm_right', [-100 100]);
+    fis = addmf(fis, 'output', 2, 'RevFull', 'trimf', [-100 -100 -50]);
+    fis = addmf(fis, 'output', 2, 'RevMed', 'trimf', [-75 -50 -25]);
+    fis = addmf(fis, 'output', 2, 'Slow', 'trimf', [-40 -20 0]);
+    fis = addmf(fis, 'output', 2, 'Zero', 'trimf', [-10 0 10]);
+    fis = addmf(fis, 'output', 2, 'Creep', 'trimf', [0 20 40]);
+    fis = addmf(fis, 'output', 2, 'FwdMed', 'trimf', [25 50 75]);
+    fis = addmf(fis, 'output', 2, 'FwdFull', 'trimf', [50 100 100]);
+    
+    % Rule Base
+    ruleList = [
+    1  1  5  3  1  1;  % Rule 1
+    1  2  3  6  1  1;  % Rule 2
+    1  3  4  4  1  1;  % Rule 3
+    1  4  6  3  1  1;  % Rule 4
+    1  5  3  5  1  1;  % Rule 5
+    
+    2  1  5  7  1  1;  % Rule 6
+    2  2  3  3  1  1;  % Rule 7
+    2  3  6  6  1  1;  % Rule 8
+    2  4  3  3  1  1;  % Rule 9
+    2  5  7  5  1  1;  % Rule 10
+    
+    3  1  1  7  1  1;  % Rule 11
+    3  2  5  7  1  1;  % Rule 12
+    3  3  3  3  1  1;  % Rule 13
+    3  4  7  5  1  1;  % Rule 14
+    3  5  7  1  1  1;  % Rule 15
+    
+    4  1  1  7  1  1;  % Rule 16
+    4  2  5  7  1  1;  % Rule 17
+    4  3  7  7  1  1;  % Rule 18
+    4  4  7  5  1  1;  % Rule 19
+    4  5  7  1  1  1;  % Rule 20
+    
+    5  1  1  7  1  1;  % Rule 21
+    5  2  5  7  1  1;  % Rule 22
+    5  3  7  7  1  1;  % Rule 23
+    5  4  7  5  1  1;  % Rule 24
+    5  5  7  1  1  1;  % Rule 25
+    ];
+    
+    fis = addrule(fis, ruleList);
+    
+    % Save FIS
+    writefis(fis, 'path_following');
+    
+    % Plot membership functions
+    figure;
+    subplot(2,2,1); plotmf(fis, 'input', 1); title('Distance Error');
+    subplot(2,2,2); plotmf(fis, 'input', 2); title('Heading Error');
+    subplot(2,2,3); plotmf(fis, 'output', 1); title('PWM Left');
+    subplot(2,2,4); plotmf(fis, 'output', 2); title('PWM Right');
+end
