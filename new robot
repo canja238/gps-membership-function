@@ -4,6 +4,14 @@
 // Debug Mode (uncomment for debugging)
 // #define DEBUG
 
+#ifdef DEBUG
+#define DEBUG_PRINT(x) Serial.print(x)
+#define DEBUG_PRINTLN(x) Serial.println(x)
+#else
+#define DEBUG_PRINT(x)
+#define DEBUG_PRINTLN(x)
+#endif
+
 // GPS Module (NEO-M8N)
 TinyGPSPlus gps;
 #define GPS_SERIAL Serial1  // TX1=18, RX1=19
@@ -144,11 +152,3 @@ void stopMotors() {
   digitalWrite(motorPin3, LOW);
   digitalWrite(motorPin4, LOW);
 }
-
-#ifdef DEBUG
-#define DEBUG_PRINT(x) Serial.print(x)
-#define DEBUG_PRINTLN(x) Serial.println(x)
-#else
-#define DEBUG_PRINT(x)
-#define DEBUG_PRINTLN(x)
-#endif
