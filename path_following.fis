@@ -348,7 +348,8 @@ function gps_navigation_controller()
                 persistentData.lastValidTime = datetime('now');
             else
                 % Handle timeout
-                if seconds(datetime('now') - persistentData.lastValidTime > TIMEOUT_SECONDS
+                if seconds(datetime('now') - persistentData.lastValidTime) > TIMEOUT_SECONDS
+
                     warning('No valid data for %.1f seconds. Stopping motors.', TIMEOUT_SECONDS);
                     sendMotorCommand(hc12, 0, 0, 0);
                     persistentData.lastValidTime = datetime('now');
