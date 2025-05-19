@@ -2,73 +2,43 @@ function path_following()
     % Create new FIS using modern syntax
     fis = mamfis('Name', 'path_following');
     
-    % Add distance_error input
+    % Add distance_error input (3 membership functions)
     fis = addInput(fis, [0 5], 'Name', 'distance_error');
-    fis = addMF(fis, 'distance_error', 'trimf', [0 0 1.25], 'Name', 'VeryClose');
-    fis = addMF(fis, 'distance_error', 'trimf', [0.5 1.5 2.5], 'Name', 'Close');
-    fis = addMF(fis, 'distance_error', 'trimf', [1.5 2.5 3.5], 'Name', 'Medium');
-    fis = addMF(fis, 'distance_error', 'trimf', [2.5 3.5 4.5], 'Name', 'Far');
-    fis = addMF(fis, 'distance_error', 'trimf', [3.5 5 5], 'Name', 'VeryFar');
+    fis = addMF(fis, 'distance_error', 'trimf', [0 0 2.5], 'Name', 'Close');
+    fis = addMF(fis, 'distance_error', 'trimf', [0.5 2.5 4.5], 'Name', 'Medium');
+    fis = addMF(fis, 'distance_error', 'trimf', [2.5 5 5], 'Name', 'Far');
     
-    % Add heading_error input
+    % Add heading_error input (3 membership functions)
     fis = addInput(fis, [-180 180], 'Name', 'heading_error');
-    fis = addMF(fis, 'heading_error', 'trimf', [-180 -180 -90], 'Name', 'LeftSharp');
-    fis = addMF(fis, 'heading_error', 'trimf', [-135 -45 0], 'Name', 'LeftMod');
-    fis = addMF(fis, 'heading_error', 'trimf', [-30 0 30], 'Name', 'Aligned');
-    fis = addMF(fis, 'heading_error', 'trimf', [0 45 135], 'Name', 'RightMod');
-    fis = addMF(fis, 'heading_error', 'trimf', [90 180 180], 'Name', 'RightSharp');
+    fis = addMF(fis, 'heading_error', 'trimf', [-180 -180 -45], 'Name', 'Left');
+    fis = addMF(fis, 'heading_error', 'trimf', [-90 0 90], 'Name', 'Straight');
+    fis = addMF(fis, 'heading_error', 'trimf', [45 180 180], 'Name', 'Right');
     
-    % Add pwm_left output
+    % Add pwm_left output (3 membership functions)
     fis = addOutput(fis, [-100 100], 'Name', 'pwm_left');
-    fis = addMF(fis, 'pwm_left', 'trimf', [-100 -100 -50], 'Name', 'RevFull');
-    fis = addMF(fis, 'pwm_left', 'trimf', [-75 -50 -25], 'Name', 'RevMed');
-    fis = addMF(fis, 'pwm_left', 'trimf', [-40 -20 0], 'Name', 'Slow');
-    fis = addMF(fis, 'pwm_left', 'trimf', [-10 0 10], 'Name', 'Zero');
-    fis = addMF(fis, 'pwm_left', 'trimf', [0 20 40], 'Name', 'Creep');
-    fis = addMF(fis, 'pwm_left', 'trimf', [25 50 75], 'Name', 'FwdMed');
-    fis = addMF(fis, 'pwm_left', 'trimf', [50 100 100], 'Name', 'FwdFull');
+    fis = addMF(fis, 'pwm_left', 'trimf', [-100 -100 0], 'Name', 'Reverse');
+    fis = addMF(fis, 'pwm_left', 'trimf', [-50 0 50], 'Name', 'Slow');
+    fis = addMF(fis, 'pwm_left', 'trimf', [0 100 100], 'Name', 'Forward');
     
     % Add pwm_right output (same as pwm_left)
     fis = addOutput(fis, [-100 100], 'Name', 'pwm_right');
-    fis = addMF(fis, 'pwm_right', 'trimf', [-100 -100 -50], 'Name', 'RevFull');
-    fis = addMF(fis, 'pwm_right', 'trimf', [-75 -50 -25], 'Name', 'RevMed');
-    fis = addMF(fis, 'pwm_right', 'trimf', [-40 -20 0], 'Name', 'Slow');
-    fis = addMF(fis, 'pwm_right', 'trimf', [-10 0 10], 'Name', 'Zero');
-    fis = addMF(fis, 'pwm_right', 'trimf', [0 20 40], 'Name', 'Creep');
-    fis = addMF(fis, 'pwm_right', 'trimf', [25 50 75], 'Name', 'FwdMed');
-    fis = addMF(fis, 'pwm_right', 'trimf', [50 100 100], 'Name', 'FwdFull');
+    fis = addMF(fis, 'pwm_right', 'trimf', [-100 -100 0], 'Name', 'Reverse');
+    fis = addMF(fis, 'pwm_right', 'trimf', [-50 0 50], 'Name', 'Slow');
+    fis = addMF(fis, 'pwm_right', 'trimf', [0 100 100], 'Name', 'Forward');
     
-    % Rule Base
+    % Simplified 3x3 Rule Base
     ruleList = [
-    1  1  5  3  1  1;  % Rule 1
-    1  2  3  6  1  1;  % Rule 2
-    1  3  4  4  1  1;  % Rule 3
-    1  4  6  3  1  1;  % Rule 4
-    1  5  3  5  1  1;  % Rule 5
+    1  1  3  1  1  1;  % If Close and Left, then Forward Left and Reverse Right
+    1  2  2  2  1  1;  % If Close and Straight, then Slow both
+    1  3  1  3  1  1;  % If Close and Right, then Reverse Left and Forward Right
     
-    2  1  5  7  1  1;  % Rule 6
-    2  2  3  3  1  1;  % Rule 7
-    2  3  6  6  1  1;  % Rule 8
-    2  4  3  3  1  1;  % Rule 9
-    2  5  7  5  1  1;  % Rule 10
+    2  1  3  2  1  1;  % If Medium and Left, then Forward Left and Slow Right
+    2  2  3  3  1  1;  % If Medium and Straight, then Forward both
+    2  3  2  3  1  1;  % If Medium and Right, then Slow Left and Forward Right
     
-    3  1  1  7  1  1;  % Rule 11
-    3  2  5  7  1  1;  % Rule 12
-    3  3  3  3  1  1;  % Rule 13
-    3  4  7  5  1  1;  % Rule 14
-    3  5  7  1  1  1;  % Rule 15
-    
-    4  1  1  7  1  1;  % Rule 16
-    4  2  5  7  1  1;  % Rule 17
-    4  3  7  7  1  1;  % Rule 18
-    4  4  7  5  1  1;  % Rule 19
-    4  5  7  1  1  1;  % Rule 20
-    
-    5  1  1  7  1  1;  % Rule 21
-    5  2  5  7  1  1;  % Rule 22
-    5  3  7  7  1  1;  % Rule 23
-    5  4  7  5  1  1;  % Rule 24
-    5  5  7  1  1  1;  % Rule 25
+    3  1  3  1  1  1;  % If Far and Left, then Forward Left and Reverse Right
+    3  2  3  3  1  1;  % If Far and Straight, then Forward both
+    3  3  1  3  1  1;  % If Far and Right, then Reverse Left and Forward Right
     ];
     
     fis = addRule(fis, ruleList);
@@ -82,4 +52,9 @@ function path_following()
     subplot(2,2,2); plotmf(fis, 'input', 2); title('Heading Error');
     subplot(2,2,3); plotmf(fis, 'output', 1); title('PWM Left');
     subplot(2,2,4); plotmf(fis, 'output', 2); title('PWM Right');
+    
+    % Plot rule surface
+    figure;
+    gensurf(fis);
+    title('Control Surface');
 end
