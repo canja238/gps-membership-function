@@ -1,15 +1,15 @@
 #include <TinyGPS++.h>
 #include <SoftwareSerial.h>
 
-// Enable debug mode (uncomment for detailed serial output)
-#define DEBUG
+// Debug Mode (uncomment for debugging)
+// #define DEBUG
 
 #ifdef DEBUG
-  #define DEBUG_PRINT(x) Serial.print(x)
-  #define DEBUG_PRINTLN(x) Serial.println(x)
+#define DEBUG_PRINT(x) Serial.print(x)
+#define DEBUG_PRINTLN(x) Serial.println(x)
 #else
-  #define DEBUG_PRINT(x)
-  #define DEBUG_PRINTLN(x)
+#define DEBUG_PRINT(x)
+#define DEBUG_PRINTLN(x)
 #endif
 
 // GPS Module (NEO-M8N)
@@ -18,6 +18,7 @@ TinyGPSPlus gps;
 
 // HC-12 Wireless
 #define HC12_SERIAL Serial2 // TX2=16, RX2=17
+#define HC12_SET_PIN 15     // Connect to SET pin of HC-12
 
 // Motor Control (L293D)
 const int ENA = 12;  // PWM Left
@@ -29,20 +30,24 @@ const int motorPin4 = 10;  // Right Dir2
 
 // System Parameters
 const unsigned long MOTOR_TIMEOUT_MS = 1000;  // Safety timeout
+const unsigned long HC12_INIT_DELAY = 200;   // Delay after HC-12 configuration
+
 unsigned long lastCommandTime = 0;
-unsigned long lastHCTestTime = 0;
-bool hc12Active = false;
+bool motorsEnabled = false;
 
 void setup() {
   #ifdef DEBUG
   Serial.begin(9600);
-  while (!Serial);
   DEBUG_PRINTLN("System Initializing...");
   #endif
 
-  GPS_SERIAL.begin(9600);
-  HC12_SERIAL.begin(9600);
+  // Initialize HC-12 module
+  pinMode(HC12_SET_PIN, OUTPUT);
+  configureHC12();
 
+  // Initialize GPS
+  GPS_SERIAL.begin(9600);
+  
   // Initialize motor pins
   pinMode(ENA, OUTPUT);
   pinMode(ENB, OUTPUT);
@@ -51,90 +56,51 @@ void setup() {
   pinMode(motorPin3, OUTPUT);
   pinMode(motorPin4, OUTPUT);
   
+  // Stop motors initially
   stopMotors();
-  
-  // HC-12 connection test
-  HC12_SERIAL.println("HC12_TEST"); 
-  lastHCTestTime = millis();
-  
   DEBUG_PRINTLN("Initialization Complete");
 }
 
-void loop() {
-  // 1. HC-12 Connection Check
-  if (!hc12Active && millis() - lastHCTestTime > 2000) {
-    HC12_SERIAL.println("HC12_TEST");
-    lastHCTestTime = millis();
-    DEBUG_PRINTLN("Sent HC-12 test ping");
-  }
+void configureHC12() {
+  // Put HC-12 into configuration mode
+  digitalWrite(HC12_SET_PIN, LOW);
+  delay(HC12_INIT_DELAY);
+  
+  // Configure HC-12 settings
+  HC12_SERIAL.begin(9600);
+  HC12_SERIAL.print("AT+DEFAULT");  // Reset to default settings
+  delay(HC12_INIT_DELAY);
+  HC12_SERIAL.print("AT+B9600");    // Set baud rate to 9600
+  delay(HC12_INIT_DELAY);
+  HC12_SERIAL.print("AT+C100");     // Set channel 1
+  delay(HC12_INIT_DELAY);
+  
+  // Return to normal mode
+  digitalWrite(HC12_SET_PIN, HIGH);
+  delay(HC12_INIT_DELAY);
+}
 
-  // 2. GPS Data Handling
+void loop() {
+  // 1. GPS Data Handling
   while (GPS_SERIAL.available() > 0) {
-    char c = GPS_SERIAL.read();
-    #ifdef DEBUG
-    // Serial.write(c);  // Uncomment to see raw GPS data
-    #endif
-    if (gps.encode(c)) {
+    if (gps.encode(GPS_SERIAL.read())) {
       if (gps.location.isValid() && gps.location.isUpdated()) {
-        // Send data to MATLAB: lat,lng,heading
-        HC12_SERIAL.print(gps.location.lat(), 9);
-        HC12_SERIAL.print(",");
-        HC12_SERIAL.print(gps.location.lng(), 9);
-        HC12_SERIAL.print(",");
-        HC12_SERIAL.println(gps.course.isValid() ? gps.course.deg() : 0.0);
-        
-        #ifdef DEBUG
-        DEBUG_PRINT("Position: ");
-        DEBUG_PRINT(gps.location.lat(), 9);
-        DEBUG_PRINT(", ");
-        DEBUG_PRINT(gps.location.lng(), 9);
-        DEBUG_PRINT(", Heading: ");
-        DEBUG_PRINTLN(gps.course.isValid() ? gps.course.deg() : 0.0);
-        #endif
-        
-        hc12Active = true;  // Mark HC-12 as active
+        sendGPSData();
       }
     }
   }
 
-  // 3. Motor Command Handling
+  // 2. Motor Command Handling
   if (HC12_SERIAL.available() > 0) {
     String command = HC12_SERIAL.readStringUntil('\n');
     command.trim();
-    
-    // Check for HC-12 test response
-    if (command == "HC12_ACK") {
-      hc12Active = true;
-      DEBUG_PRINTLN("HC-12 connection confirmed");
-      return;
-    }
-    
-    int comma1 = command.indexOf(',');
-    int comma2 = command.indexOf(',', comma1 + 1);
-    
-    if (comma1 > 0 && comma2 > comma1) {
-      lastCommandTime = millis();
-      
-      int pwm_left = command.substring(0, comma1).toInt();
-      int pwm_right = command.substring(comma1 + 1, comma2).toInt();
-      int waypointReached = command.substring(comma2 + 1).toInt();
-
-      setMotorSpeeds(pwm_left, pwm_right);
-      
-      #ifdef DEBUG
-      DEBUG_PRINT("Motor Cmd: L=");
-      DEBUG_PRINT(pwm_left);
-      DEBUG_PRINT(" R=");
-      DEBUG_PRINT(pwm_right);
-      DEBUG_PRINT(" WP=");
-      DEBUG_PRINTLN(waypointReached);
-      #endif
-    }
+    processMotorCommand(command);
   }
 
-  // 4. Safety Check
-  if (millis() - lastCommandTime > MOTOR_TIMEOUT_MS) {
+  // 3. Safety Check
+  if (millis() - lastCommandTime > MOTOR_TIMEOUT_MS && motorsEnabled) {
     stopMotors();
+    motorsEnabled = false;
     #ifdef DEBUG
     static unsigned long lastWarning = 0;
     if (millis() - lastWarning > 2000) {
@@ -145,18 +111,64 @@ void loop() {
   }
 }
 
+void sendGPSData() {
+  // Send data to MATLAB: lat,lng,heading
+  HC12_SERIAL.print(gps.location.lat(), 9);
+  HC12_SERIAL.print(",");
+  HC12_SERIAL.print(gps.location.lng(), 9);
+  HC12_SERIAL.print(",");
+  HC12_SERIAL.println(gps.course.isValid() ? gps.course.deg() : 0.0);
+  
+  #ifdef DEBUG
+  DEBUG_PRINT("Position: ");
+  DEBUG_PRINT(gps.location.lat(), 9);
+  DEBUG_PRINT(", ");
+  DEBUG_PRINT(gps.location.lng(), 9);
+  DEBUG_PRINT(", Heading: ");
+  DEBUG_PRINTLN(gps.course.isValid() ? gps.course.deg() : 0.0);
+  #endif
+}
+
+void processMotorCommand(String command) {
+  int comma1 = command.indexOf(',');
+  int comma2 = command.indexOf(',', comma1 + 1);
+  
+  if (comma1 > 0 && comma2 > comma1) {
+    lastCommandTime = millis();
+    motorsEnabled = true;
+    
+    int pwm_left = command.substring(0, comma1).toInt();
+    int pwm_right = command.substring(comma1 + 1, comma2).toInt();
+    int waypointReached = command.substring(comma2 + 1).toInt();
+
+    // Drive motors
+    setMotorSpeeds(pwm_left, pwm_right);
+  }
+}
+
 void setMotorSpeeds(int left, int right) {
+  // Constrain PWM values
   left = constrain(left, -255, 255);
   right = constrain(right, -255, 255);
 
   // Left Motor
-  digitalWrite(motorPin1, left > 0 ? HIGH : LOW);
-  digitalWrite(motorPin2, left > 0 ? LOW : HIGH);
+  if (left > 0) {
+    digitalWrite(motorPin1, HIGH);
+    digitalWrite(motorPin2, LOW);
+  } else {
+    digitalWrite(motorPin1, LOW);
+    digitalWrite(motorPin2, HIGH);
+  }
   analogWrite(ENA, abs(left));
 
   // Right Motor
-  digitalWrite(motorPin3, right > 0 ? HIGH : LOW);
-  digitalWrite(motorPin4, right > 0 ? LOW : HIGH);
+  if (right > 0) {
+    digitalWrite(motorPin3, HIGH);
+    digitalWrite(motorPin4, LOW);
+  } else {
+    digitalWrite(motorPin3, LOW);
+    digitalWrite(motorPin4, HIGH);
+  }
   analogWrite(ENB, abs(right));
 }
 
@@ -168,3 +180,341 @@ void stopMotors() {
   digitalWrite(motorPin3, LOW);
   digitalWrite(motorPin4, LOW);
 }
+
+
+matlab:
+
+function gps_navigation_controller()
+    % Clear workspace and close all figures
+    clear; clc; close all;
+    
+    % Serial Port Configuration
+    port = 'COM7'; % Adjust to your COM port
+    baudrate = 9600;
+    
+    % Load Fuzzy Logic System
+    fis = readfis('path_following.fis'); % Ensure this file is in your path
+    
+    % Waypoints (define your path here)
+    waypoints = [
+        7.214941000, 124.249145000; 
+        7.214940679, 124.249146167; 
+        7.214940357, 124.249147333; 
+        7.214940036, 124.249148500;
+        7.214939714, 124.249149667; 
+        7.214939393, 124.249150833;
+        7.214939071, 124.249152000; 
+        7.214938750, 124.249153167; 
+        7.214938429, 124.249154333;
+        7.214938107, 124.249155500; 
+        7.214937786, 124.249156667; 
+        7.214937464, 124.249157833;
+        7.214937143, 124.249159000; 
+        7.214936821, 124.249160167; 
+        7.214936500, 124.249161333;
+        7.214936179, 124.249162500; 
+        7.214935857, 124.249163667; 
+        7.214935536, 124.249164833;
+        7.214935214, 124.249166000; 
+        7.214934893, 124.249167167; 
+        7.214934571, 124.249168333;
+        7.214934250, 124.249169500; 
+        7.214933929, 124.249170667; 
+        7.214933607, 124.249171833;
+        7.214933286, 124.249173000; 
+        7.214932964, 124.249174167; 
+        7.214932643, 124.249175333;
+        7.214932321, 124.249176500; 
+        7.214932000, 124.249177667; 
+        7.214931679, 124.249178833;
+        7.214931357, 124.249180000; 
+        7.214931036, 124.249181167; 
+        7.214930714, 124.249182333;
+        7.214930393, 124.249183500; 
+        7.214930071, 124.249184667; 
+        7.214929750, 124.249185833;
+        7.214929429, 124.249187000; 
+        7.214929107, 124.249188167; 
+        7.214928786, 124.249189333;
+        7.214928464, 124.249190500; 
+        7.214928143, 124.249191667; 
+        7.214927821, 124.249192833;
+        7.214927500, 124.249194000; 
+        7.214927179, 124.249195167; 
+        7.214926857, 124.249196333;
+        7.214926536, 124.249197500; 
+        7.214926214, 124.249198667; 
+        7.214925893, 124.249199833;
+        7.214925571, 124.249201000; 
+        7.214925250, 124.249202167; 
+        7.214924929, 124.249203333;
+        7.214924607, 124.249204500; 
+        7.214924286, 124.249205667; 
+        7.214923964, 124.249206833;
+        7.214923643, 124.249208000; 
+        7.214923321, 124.249209167; 
+        7.214923000, 124.249210333;
+        7.214922679, 124.249211500; 
+        7.214922357, 124.249212667; 
+        7.214922036, 124.249213833;
+        7.214921714, 124.249215000; 
+        7.214921393, 124.249216167; 
+        7.214921071, 124.249217333;
+        7.214920750, 124.249218500; 
+        7.214920429, 124.249219667; 
+        7.214920107, 124.249220833;
+        7.214919786, 124.249222000; 
+        7.214919464, 124.249223167; 
+        7.214919143, 124.249224333;
+        7.214918821, 124.249225500; 
+        7.214918500, 124.249226667; 
+        7.214918179, 124.249227833;
+        7.214917857, 124.249229000; 
+        7.214917536, 124.249230167; 
+        7.214917214, 124.249231333;
+        7.214916893, 124.249232500; 
+        7.214916571, 124.249233667; 
+        7.214916250, 124.249234833;
+        7.214915929, 124.249236000; 
+        7.214915607, 124.249237167; 
+        7.214915286, 124.249238333;
+        7.214914964, 124.249239500; 
+        7.214914643, 124.249240667; 
+        7.214914321, 124.249241833;
+        7.214914000, 124.249243000;
+    ];
+    
+    % System Parameters
+    MAX_PWM = 255; % Maximum PWM value
+    TIMEOUT_SECONDS = 2.0;
+    WAYPOINT_TOLERANCE = 5.0; % meters
+    
+    % Shared data variables
+    persistentData = struct('gpsData', struct('lat', nan, 'lng', nan, 'heading', nan), ...
+                          'dataAvailable', false, ...
+                          'currentWaypoint', 1, ...
+                          'lastValidTime', datetime('now'));
+    
+    % Initialize Serial Connection with HC-12
+    try
+        hc12 = serialport(port, baudrate);
+        configureTerminator(hc12, "LF");
+        configureCallback(hc12, "terminator", @(src,~)readSerialData(src, persistentData));
+        flush(hc12);
+        fprintf('Successfully connected to HC-12 on %s\n', port);
+    catch ME
+        error('Failed to initialize serial port: %s', ME.message);
+    end
+    
+    % Initialize Data Log
+    logFile = initializeDataLog();
+    
+    % Create Visualization
+    [hFig, hRobot, hPath, hTarget] = initializeVisualization(waypoints);
+    
+    % Main Control Loop
+    try
+        while ishandle(hFig)
+            loopStart = tic;
+            
+            % Process available data
+            if persistentData.dataAvailable
+                persistentData.dataAvailable = false;
+                
+                % 1. Navigation Calculation
+                [pwm_left, pwm_right, wp_reached] = calculateNavigation(...
+                    persistentData.gpsData, waypoints, persistentData.currentWaypoint, fis, ...
+                    WAYPOINT_TOLERANCE, MAX_PWM);
+                
+                % 2. Waypoint Management
+                if wp_reached
+                    persistentData.currentWaypoint = persistentData.currentWaypoint + 1;
+                    if persistentData.currentWaypoint > size(waypoints, 1)
+                        persistentData.currentWaypoint = 1; % Loop back to first waypoint
+                    end
+                    fprintf('Waypoint reached! Next: %d\n', persistentData.currentWaypoint);
+                end
+                
+                % 3. Actuation
+                sendMotorCommand(hc12, pwm_left, pwm_right, wp_reached);
+                
+                % 4. Visualization Update
+                updateVisualization(hRobot, hTarget, persistentData.gpsData, waypoints, persistentData.currentWaypoint);
+                
+                % 5. Data Logging
+                logNavigationData(logFile, persistentData.gpsData, waypoints(persistentData.currentWaypoint,:), ...
+                    [pwm_left, pwm_right], wp_reached);
+                
+                persistentData.lastValidTime = datetime('now');
+            else
+                % Handle timeout
+                if seconds(datetime('now') - persistentData.lastValidTime > TIMEOUT_SECONDS
+                    warning('No valid data for %.1f seconds. Stopping motors.', TIMEOUT_SECONDS);
+                    sendMotorCommand(hc12, 0, 0, 0);
+                    persistentData.lastValidTime = datetime('now');
+                end
+            end
+            
+            % Loop timing control
+            loopTime = toc(loopStart);
+            pause(max(0.05 - loopTime, 0)); % Maintain ~20Hz
+        end
+    catch ME
+        handleError(ME, hc12);
+    end
+    
+    % Cleanup
+    cleanup(hc12, logFile);
+end
+
+%% Callback Function for Serial Data
+function persistentData = readSerialData(src, persistentData)
+    try
+        raw = readline(src);
+        values = strsplit(strtrim(raw), ',');
+        
+        if numel(values) == 3
+            persistentData.gpsData.lat = str2double(values{1});
+            persistentData.gpsData.lng = str2double(values{2});
+            persistentData.gpsData.heading = str2double(values{3});
+            
+            % Validate GPS data
+            if ~isnan(persistentData.gpsData.lat) && ~isnan(persistentData.gpsData.lng) && ...
+               abs(persistentData.gpsData.lat) <= 90 && abs(persistentData.gpsData.lng) <= 180
+                persistentData.dataAvailable = true;
+            end
+        end
+    catch
+        % Silently handle read errors
+    end
+end
+
+%% Navigation Calculation
+function [pwm_left, pwm_right, wp_reached] = calculateNavigation(...
+        gpsData, waypoints, currentWP, fis, tolerance, max_pwm)
+    
+    target = waypoints(currentWP,:);
+    
+    % Calculate distance error (meters)
+    distance_error = deg2km(distance(gpsData.lat, gpsData.lng, target(1), target(2))) * 1000;
+    
+    % Calculate heading error (degrees)
+    y = sind(target(2)-gpsData.lng) * cosd(target(1));
+    x = cosd(gpsData.lat) * sind(target(1)) - sind(gpsData.lat) * cosd(target(1)) * cosd(target(2)-gpsData.lng);
+    target_heading = atan2d(y, x);
+    heading_error = wrapTo180(target_heading - gpsData.heading);
+    
+    % Fuzzy Logic Control
+    pwm_output = evalfis(fis, [distance_error, heading_error]);
+    
+    % Scale and constrain PWM values
+    base_pwm = round(max_pwm * 0.6); % Base PWM at 60% of max
+    pwm_left = round(constrain(base_pwm * (pwm_output(1)/100), -max_pwm, max_pwm));
+    pwm_right = round(constrain(base_pwm * (pwm_output(2)/100), -max_pwm, max_pwm));
+    
+    % Waypoint check
+    wp_reached = distance_error < tolerance;
+end
+
+%% Visualization Functions
+function [hFig, hRobot, hPath, hTarget] = initializeVisualization(waypoints)
+    hFig = figure('Name', 'GPS Navigation Controller', 'NumberTitle', 'off', ...
+                 'Position', [100, 100, 800, 600]);
+    hPath = plot(waypoints(:,2), waypoints(:,1), 'b-o', 'LineWidth', 1.5);
+    hold on;
+    hRobot = plot(nan, nan, 'ro', 'MarkerSize', 10, 'MarkerFaceColor', 'r');
+    hTarget = plot(waypoints(1,2), waypoints(1,1), 'gx', 'MarkerSize', 15, 'LineWidth', 2);
+    xlabel('Longitude');
+    ylabel('Latitude');
+    title('Real-time Robot Navigation');
+    grid on;
+    axis equal;
+    legend('Path', 'Robot', 'Target', 'Location', 'best');
+end
+
+function updateVisualization(hRobot, hTarget, gpsData, waypoints, currentWP)
+    set(hRobot, 'XData', gpsData.lng, 'YData', gpsData.lat);
+    set(hTarget, 'XData', waypoints(currentWP,2), 'YData', waypoints(currentWP,1));
+    drawnow limitrate;
+end
+
+%% Data Logging Functions
+function logFile = initializeDataLog()
+    logFile = sprintf('navlog_%s.csv', datestr(now, 'yyyymmdd_HHMMSS'));
+    fid = fopen(logFile, 'w');
+    fprintf(fid, 'Timestamp,Lat,Lng,Heading,TargetLat,TargetLng,DistanceError,HeadingError,PWM_L,PWM_R,WaypointReached\n');
+    fclose(fid);
+end
+
+function logNavigationData(logFile, gpsData, targetWP, pwm, wp_reached)
+    % Calculate errors for logging
+    distance_error = deg2km(distance(gpsData.lat, gpsData.lng, targetWP(1), targetWP(2))) * 1000;
+    y = sind(targetWP(2)-gpsData.lng) * cosd(targetWP(1));
+    x = cosd(gpsData.lat) * sind(targetWP(1)) - sind(gpsData.lat) * cosd(targetWP(1)) * cosd(targetWP(2)-gpsData.lng);
+    target_heading = atan2d(y, x);
+    heading_error = wrapTo180(target_heading - gpsData.heading);
+    
+    fid = fopen(logFile, 'a');
+    fprintf(fid, '%s,%.9f,%.9f,%.3f,%.9f,%.9f,%.3f,%.3f,%d,%d,%d\n',...
+            datestr(now, 'yyyy-mm-dd HH:MM:SS.FFF'),...
+            gpsData.lat, gpsData.lng, gpsData.heading,...
+            targetWP(1), targetWP(2),...
+            distance_error, heading_error,...
+            pwm(1), pwm(2),...
+            wp_reached);
+    fclose(fid);
+end
+
+%% Communication Functions
+function sendMotorCommand(hc12, pwm_l, pwm_r, wp_reached)
+    command = sprintf('%d,%d,%d', pwm_l, pwm_r, wp_reached);
+    writeline(hc12, command);
+end
+
+%% Utility Functions
+function dist = distance(lat1, lon1, lat2, lon2)
+    R = 6371; % Earth radius in km
+    dLat = deg2rad(lat2-lat1);
+    dLon = deg2rad(lon2-lon1);
+    a = sin(dLat/2)^2 + cos(deg2rad(lat1))*cos(deg2rad(lat2))*sin(dLon/2)^2;
+    c = 2 * atan2(sqrt(a), sqrt(1-a));
+    dist = R * c; % Distance in km
+end
+
+function y = constrain(x, min_val, max_val)
+    y = min(max(x, min_val), max_val);
+end
+
+%% Error Handling and Cleanup
+function handleError(ME, hc12)
+    fprintf('Error occurred:\n');
+    fprintf('Message: %s\n', ME.message);
+    for k = 1:length(ME.stack)
+        fprintf('File: %s\nLine: %d\nFunction: %s\n\n',...
+                ME.stack(k).file,...
+                ME.stack(k).line,...
+                ME.stack(k).name);
+    end
+    
+    % Emergency stop
+    try
+        writeline(hc12, '0,0,0');
+    catch
+        fprintf('Failed to send stop command\n');
+    end
+end
+
+function cleanup(hc12, logFile)
+    fprintf('Closing serial connection and log file...\n');
+    try
+        writeline(hc12, '0,0,0');
+        delete(hc12);
+        clear hc12;
+    catch
+        fprintf('Error closing serial port\n');
+    end
+    
+    if exist(logFile, 'file')
+        fprintf('Data logged to: %s\n', logFile);
+    end
+end
