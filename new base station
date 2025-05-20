@@ -1,0 +1,74 @@
+#include <SoftwareSerial.h>
+
+// ====== DEBUG SETTINGS ======
+// Uncomment to enable debug output to Serial Monitor
+// #define DEBUG
+
+#ifdef DEBUG
+  #define DEBUG_PRINT(x) Serial.print(x)
+  #define DEBUG_PRINTLN(x) Serial.println(x)
+#else
+  #define DEBUG_PRINT(x)
+  #define DEBUG_PRINTLN(x)
+#endif
+
+// ====== HC-12 WIRELESS MODULE ======
+#define HC12_RX_PIN 10  // HC-12 TX -> Arduino Pin 10
+#define HC12_TX_PIN 11  // HC-12 RX -> Arduino Pin 11
+SoftwareSerial HC12(HC12_TX_PIN, HC12_RX_PIN); // RX, TX
+
+// ====== MATLAB SERIAL ======
+#define MATLAB_SERIAL Serial // USB connection to MATLAB
+
+// ====== SYSTEM PARAMS ======
+const unsigned long BAUD_RATE = 9600;
+const unsigned long SERIAL_TIMEOUT = 100; // ms
+
+void setup() {
+  #ifdef DEBUG
+  Serial.begin(BAUD_RATE);
+  while (!Serial); // Wait for Serial Monitor
+  DEBUG_PRINTLN(F("Base Station Initializing..."));
+  #endif
+
+  // Initialize HC-12
+  HC12.begin(BAUD_RATE);
+  HC12.setTimeout(SERIAL_TIMEOUT);
+
+  // Initialize MATLAB serial
+  MATLAB_SERIAL.begin(BAUD_RATE);
+  MATLAB_SERIAL.setTimeout(SERIAL_TIMEOUT);
+
+  #ifdef DEBUG
+  DEBUG_PRINTLN(F("Base Station Ready"));
+  DEBUG_PRINTLN(F("Listening for data..."));
+  #endif
+}
+
+void loop() {
+  // --- Forward Robot Data to MATLAB ---
+  if (HC12.available() > 0) {
+    String robotData = HC12.readStringUntil('\n');
+    robotData.trim();
+
+    #ifdef DEBUG
+    DEBUG_PRINT(F("Robot -> MATLAB: "));
+    DEBUG_PRINTLN(robotData);
+    #endif
+
+    MATLAB_SERIAL.println(robotData); // Forward to MATLAB
+  }
+
+  // --- Forward MATLAB Commands to Robot ---
+  if (MATLAB_SERIAL.available() > 0) {
+    String matlabCommand = MATLAB_SERIAL.readStringUntil('\n');
+    matlabCommand.trim();
+
+    #ifdef DEBUG
+    DEBUG_PRINT(F("MATLAB -> Robot: "));
+    DEBUG_PRINTLN(matlabCommand);
+    #endif
+
+    HC12.println(matlabCommand); // Forward to Robot
+  }
+}
