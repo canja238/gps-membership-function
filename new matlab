@@ -3,15 +3,15 @@ function gps_navigation_controller()
     clear; clc; close all;
     
     % Serial Port Configuration
-    port = 'COM7'; % Adjust to your COM port
-    baudrate = 9600;
+    port = 'COM8'; % Adjust to your COM port
+    baudrate = 115200;
     
     % Load Fuzzy Logic System
     fis = readfis('path_following.fis');
     
     % Waypoints (define your path here)
     waypoints = [
-  7.214941000, 124.249145000; 7.214940679, 124.249146167; 7.214940357, 124.249147333;
+7.214941000, 124.249145000; 7.214940679, 124.249146167; 7.214940357, 124.249147333;
   7.214940036, 124.249148500; 7.214939714, 124.249149667; 7.214939393, 124.249150833;
   7.214939071, 124.249152000; 7.214938750, 124.249153167; 7.214938429, 124.249154333;
   7.214938107, 124.249155500; 7.214937786, 124.249156667; 7.214937464, 124.249157833;
@@ -43,165 +43,112 @@ function gps_navigation_controller()
     ];
     
     % System Parameters
-    MAX_SPEED_MPS = 0.3333;  % m/s
-    SPEED_50_PERCENT = 0.16665;
-    SPEED_40_PERCENT = 0.13332;
-    SPEED_30_PERCENT = 0.09999;
-    DELTA_T = 0.775; % seconds
-    DISTANCE_TRAVELED_DELTA_T = 0.1291925; % SPEED_50_PERCENT * DELTA_T
+    MAX_PWM = 255;
+    BASE_PWM = 128; % Adjust based on your robot's speed
     WAYPOINT_TOLERANCE = 5.0; % meters
-    TIMEOUT_SECONDS = 2.0;
-    MAX_PWM = 255; % Maximum PWM value
-    
-    % Base PWM for 50% speed (calibrate this for your robot)
-    BASE_PWM = round(MAX_PWM * (SPEED_50_PERCENT / MAX_SPEED_MPS));
+    COMMAND_TIMEOUT = 1.0; % seconds
+    currentWaypoint = 1;
     
     % Initialize Serial Connection
     try
-        hc12 = serialport(port, baudrate);
-        configureTerminator(hc12, "LF");
-        flush(hc12);
+        s = serialport(port, baudrate);
+        configureTerminator(s, "LF");
+        flush(s);
     catch ME
         error('Failed to initialize serial port: %s', ME.message);
     end
     
-    % Initialize Navigation Variables
-    currentWaypoint = 1;
-    lastValidTime = datetime('now');
-    logFile = initializeDataLog();
-    
     % Create Visualization
-    [hFig, hRobot, hPath, hTarget] = initializeVisualization(waypoints);
+    hFig = figure('Name', 'GPS Navigation', 'NumberTitle', 'off');
+    hPath = plot(waypoints(:,2), waypoints(:,1), 'b-o');
+    hold on;
+    hRobot = plot(nan, nan, 'ro', 'MarkerFaceColor', 'r');
+    hTarget = plot(waypoints(1,2), waypoints(1,1), 'gx', 'LineWidth', 2);
+    xlabel('Longitude');
+    ylabel('Latitude');
+    title('Real-time Navigation');
+    grid on;
+    axis equal;
     
     % Main Control Loop
     try
         while ishandle(hFig)
-            loopStart = tic;
-            
-            % 1. Data Acquisition
-            [gpsData, status] = readGPSData(hc12);
-            
-            if status.success
-                lastValidTime = datetime('now');
-                
-                % 2. Navigation Calculation
-                [pwm_left, pwm_right, wp_reached] = calculateNavigation(...
-                    gpsData, waypoints, currentWaypoint, fis, ...
-                    WAYPOINT_TOLERANCE, BASE_PWM, MAX_PWM, ...
-                    DISTANCE_TRAVELED_DELTA_T, SPEED_30_PERCENT, DELTA_T);
-                
-                % 3. Waypoint Management
-                if wp_reached
-                    currentWaypoint = currentWaypoint + 1;
-                    if currentWaypoint > size(waypoints, 1)
-                        currentWaypoint = 1; % Loop back to first waypoint
+            % Read GPS Data
+            if s.NumBytesAvailable > 0
+                try
+                    raw = readline(s);
+                    if contains(raw, 'LAT:')
+                        % Parse GPS Data
+                        data = parseGPSData(raw);
+                        
+                        % Navigation Calculation
+                        [pwm_left, pwm_right, wp_reached] = calculateNavigation(...
+                            data, waypoints, currentWaypoint, fis, ...
+                            WAYPOINT_TOLERANCE, BASE_PWM, MAX_PWM);
+                        
+                        % Waypoint Management
+                        if wp_reached
+                            currentWaypoint = currentWaypoint + 1;
+                            if currentWaypoint > size(waypoints, 1)
+                                currentWaypoint = 1; % Loop back
+                            end
+                            fprintf('Waypoint reached! Next: %d\n', currentWaypoint);
+                        end
+                        
+                        % Send Motor Command
+                        cmd = sprintf('%d,%d,%d', pwm_left, pwm_right, wp_reached);
+                        writeline(s, cmd);
+                        
+                        % Update Visualization
+                        set(hRobot, 'XData', data.lng, 'YData', data.lat);
+                        set(hTarget, 'XData', waypoints(currentWaypoint,2), ...
+                                     'YData', waypoints(currentWaypoint,1));
+                        drawnow;
                     end
-                    fprintf('Waypoint reached! Next: %d\n', currentWaypoint);
-                end
-                
-                % 4. Actuation
-                sendMotorCommand(hc12, pwm_left, pwm_right, wp_reached);
-                
-                % 5. Visualization Update
-                updateVisualization(hRobot, hTarget, gpsData, waypoints, currentWaypoint);
-                
-                % 6. Data Logging
-                logNavigationData(logFile, gpsData, waypoints(currentWaypoint,:), ...
-                    [pwm_left, pwm_right], wp_reached);
-            else
-                % Handle timeout
-                if seconds(datetime('now') - lastValidTime) > TIMEOUT_SECONDS
-                    warning('No valid data for %.1f seconds. Stopping motors.', TIMEOUT_SECONDS);
-                    sendMotorCommand(hc12, 0, 0, 0);
-                    lastValidTime = datetime('now');
+                catch
+                    % Silently handle parse errors
                 end
             end
-            
-            % Loop timing control
-            loopTime = toc(loopStart);
-            pause(max(0.05 - loopTime, 0)); % Maintain ~20Hz
+            pause(0.05); % Control loop rate
         end
     catch ME
-        handleError(ME, hc12);
+        % Emergency stop
+        writeline(s, '0,0,0');
+        delete(s);
+        clear s;
+        rethrow(ME);
     end
     
     % Cleanup
-    cleanup(hc12, logFile);
+    writeline(s, '0,0,0');
+    delete(s);
+    clear s;
 end
 
-%% Helper Functions
-function [hFig, hRobot, hPath, hTarget] = initializeVisualization(waypoints)
-    hFig = figure('Name', 'GPS Navigation Controller', 'NumberTitle', 'off');
-    hPath = plot(waypoints(:,2), waypoints(:,1), 'b-o', 'LineWidth', 1.5);
-    hold on;
-    hRobot = plot(nan, nan, 'ro', 'MarkerSize', 10, 'MarkerFaceColor', 'r');
-    hTarget = plot(waypoints(1,2), waypoints(1,1), 'gx', 'MarkerSize', 15, 'LineWidth', 2);
-    xlabel('Longitude');
-    ylabel('Latitude');
-    title('Real-time Robot Navigation');
-    grid on;
-    axis equal;
-    legend('Path', 'Robot', 'Target', 'Location', 'best');
-end
-
-function logFile = initializeDataLog()
-    logFile = sprintf('navlog_%s.csv', datestr(now, 'yyyymmdd_HHMMSS'));
-    fid = fopen(logFile, 'w');
-    fprintf(fid, 'Timestamp,Lat,Lng,Heading,TargetLat,TargetLng,DistanceError,HeadingError,PWM_L,PWM_R,WaypointReached\n');
-    fclose(fid);
-end
-
-function [data, status] = readGPSData(hc12)
-    status.success = false;
-    data = struct('lat', nan, 'lng', nan, 'heading', nan);
-    
-    if hc12.NumBytesAvailable > 0
-        try
-            raw = readline(hc12);
-            values = strsplit(strtrim(raw), ',');
-            
-            if numel(values) == 3
-                data.lat = str2double(values{1});
-                data.lng = str2double(values{2});
-                data.heading = str2double(values{3});
-                
-                % Validate GPS data
-                if ~isnan(data.lat) && ~isnan(data.lng) && abs(data.lat) <= 90 && abs(data.lng) <= 180
-                    status.success = true;
-                end
-            end
-        catch
-            % Silently handle read errors
-        end
-    end
+function data = parseGPSData(raw)
+    % Parse "LAT:value,LON:value,HDG:value" format
+    parts = strsplit(strtrim(raw), ',');
+    data.lat = str2double(strrep(parts{1}, 'LAT:', ''));
+    data.lng = str2double(strrep(parts{2}, 'LON:', ''));
+    data.heading = str2double(strrep(parts{3}, 'HDG:', ''));
 end
 
 function [pwm_left, pwm_right, wp_reached] = calculateNavigation(...
-        gpsData, waypoints, currentWP, fis, tolerance, base_pwm, max_pwm, ...
-        dist_delta_t, speed_30_percent, delta_t)
+        data, waypoints, currentWP, fis, tolerance, base_pwm, max_pwm)
     
     target = waypoints(currentWP,:);
     
     % Calculate distance error (meters)
-    distance_error = deg2km(distance(gpsData.lat, gpsData.lng, target(1), target(2))) * 1000;
+    distance_error = deg2km(distance(data.lat, data.lng, target(1), target(2))) * 1000;
     
     % Calculate heading error (degrees)
-    y = sind(target(2)-gpsData.lng) * cosd(target(1));
-    x = cosd(gpsData.lat) * sind(target(1)) - sind(gpsData.lat) * cosd(target(1)) * cosd(target(2)-gpsData.lng);
+    y = sind(target(2)-data.lng) * cosd(target(1));
+    x = cosd(data.lat) * sind(target(1)) - sind(data.lat) * cosd(target(1)) * cosd(target(2)-data.lng);
     target_heading = atan2d(y, x);
-    heading_error = wrapTo180(target_heading - gpsData.heading);
+    heading_error = wrapTo180(target_heading - data.heading);
     
-    % Adjust errors based on expected movement
-    if distance_error > dist_delta_t
-        % If we're far away, use the expected movement to adjust our error
-        adjusted_distance = distance_error - dist_delta_t;
-    else
-        % If we're close, don't overshoot
-        adjusted_distance = max(0, distance_error - (speed_30_percent * delta_t));
-    end
-    
-    % Fuzzy Logic Control with adjusted distance
-    pwm_output = evalfis(fis, [adjusted_distance, heading_error]);
+    % Fuzzy Logic Control
+    pwm_output = evalfis(fis, [distance_error, heading_error]);
     
     % Scale and constrain PWM values
     pwm_left = round(constrain(base_pwm * (pwm_output(1)/100), -max_pwm, max_pwm));
@@ -211,66 +158,11 @@ function [pwm_left, pwm_right, wp_reached] = calculateNavigation(...
     wp_reached = distance_error < tolerance;
 end
 
-function sendMotorCommand(hc12, pwm_l, pwm_r, wp_reached)
-    command = sprintf('%d,%d,%d', pwm_l, pwm_r, wp_reached);
-    writeline(hc12, command);
-end
-
-function updateVisualization(hRobot, hTarget, gpsData, waypoints, currentWP)
-    set(hRobot, 'XData', gpsData.lng, 'YData', gpsData.lat);
-    set(hTarget, 'XData', waypoints(currentWP,2), 'YData', waypoints(currentWP,1));
-    drawnow limitrate;
-end
-
-function logNavigationData(logFile, gpsData, targetWP, pwm, wp_reached)
-    fid = fopen(logFile, 'a');
-    fprintf(fid, '%s,%.9f,%.9f,%.3f,%.9f,%.9f,%.3f,%.3f,%d,%d,%d\n',...
-            datestr(now, 'yyyy-mm-dd HH:MM:SS.FFF'),...
-            gpsData.lat, gpsData.lng, gpsData.heading,...
-            targetWP(1), targetWP(2),...
-            pwm(1), pwm(2),...
-            wp_reached);
-    fclose(fid);
-end
-
-function handleError(ME, hc12)
-    fprintf('Error occurred:\n');
-    fprintf('Message: %s\n', ME.message);
-    for k = 1:length(ME.stack)
-        fprintf('File: %s\nLine: %d\nFunction: %s\n\n',...
-                ME.stack(k).file,...
-                ME.stack(k).line,...
-                ME.stack(k).name);
-    end
-    
-    % Emergency stop
-    try
-        writeline(hc12, '0,0,0');
-    catch
-        fprintf('Failed to send stop command\n');
-    end
-end
-
-function cleanup(hc12, logFile)
-    fprintf('Closing serial connection and log file...\n');
-    try
-        writeline(hc12, '0,0,0');
-        delete(hc12);
-        clear hc12;
-    catch
-        fprintf('Error closing serial port\n');
-    end
-    
-    if exist(logFile, 'file')
-        fprintf('Data logged to: %s\n', logFile);
-    end
-end
-
 function dist = distance(lat1, lon1, lat2, lon2)
     R = 6371; % Earth radius in km
     dLat = deg2rad(lat2-lat1);
     dLon = deg2rad(lon2-lon1);
-    a = sin(dLat/2)^2 + cos(deg2rad(lat1))*cos(deg2rad(lat2))*sin(dLon/2)^2;
+    a = sin(dLat/2)^2 + cos(deg2rad(lat1)) * cos(deg2rad(lat2)) * sin(dLon/2)^2;
     c = 2 * atan2(sqrt(a), sqrt(1-a));
     dist = R * c; % Distance in km
 end
