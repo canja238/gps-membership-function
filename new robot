@@ -2,14 +2,14 @@
 #include <SoftwareSerial.h>
 
 // Debug Mode (uncomment for debugging)
-// #define DEBUG
+#define DEBUG
 
 #ifdef DEBUG
-#define DEBUG_PRINT(x) Serial.print(x)
-#define DEBUG_PRINTLN(x) Serial.println(x)
+  #define DEBUG_PRINT(x) Serial.print(x)
+  #define DEBUG_PRINTLN(x) Serial.println(x)
 #else
-#define DEBUG_PRINT(x)
-#define DEBUG_PRINTLN(x)
+  #define DEBUG_PRINT(x)
+  #define DEBUG_PRINTLN(x)
 #endif
 
 // GPS Module (NEO-M8N)
@@ -28,21 +28,17 @@ const int motorPin3 = 11;  // Right Dir1
 const int motorPin4 = 10;  // Right Dir2
 
 // System Parameters
-const float MAX_SPEED_MPS = 0.3333;  // Max linear speed (m/s)
-const float SPEED_50_PERCENT = 0.16665;
-const float SPEED_40_PERCENT = 0.13332;
-const float SPEED_30_PERCENT = 0.09999;
-const float DELTA_T = 0.775; // seconds
-const float DISTANCE_TRAVELED_DELTA_T = 0.1291925; // SPEED_50_PERCENT * DELTA_T
 const unsigned long MOTOR_TIMEOUT_MS = 1000;  // Safety timeout
-const float WAYPOINT_TOLERANCE = 5.0;  // meters
-
 unsigned long lastCommandTime = 0;
+
+// Communication
+const unsigned long GPS_UPDATE_INTERVAL = 500; // ms
+unsigned long lastGPSUpdate = 0;
 
 void setup() {
   #ifdef DEBUG
-  Serial.begin(9600);
-  DEBUG_PRINTLN("System Initializing...");
+  Serial.begin(115200);
+  DEBUG_PRINTLN("Robot Initializing...");
   #endif
 
   GPS_SERIAL.begin(9600);
@@ -63,24 +59,19 @@ void setup() {
 
 void loop() {
   // 1. GPS Data Handling
-  while (GPS_SERIAL.available() > 0) {
-    if (gps.encode(GPS_SERIAL.read())) {
-      if (gps.location.isValid() && gps.location.isUpdated()) {
-        // Send data to MATLAB: lat,lng,heading
-        HC12_SERIAL.print(gps.location.lat(), 9);
-        HC12_SERIAL.print(",");
-        HC12_SERIAL.print(gps.location.lng(), 9);
-        HC12_SERIAL.print(",");
-        HC12_SERIAL.println(gps.course.isValid() ? gps.course.deg() : 0.0);
-        
-        #ifdef DEBUG
-        DEBUG_PRINT("Position: ");
-        DEBUG_PRINT(gps.location.lat(), 9);
-        DEBUG_PRINT(", ");
-        DEBUG_PRINT(gps.location.lng(), 9);
-        DEBUG_PRINT(", Heading: ");
-        DEBUG_PRINTLN(gps.course.isValid() ? gps.course.deg() : 0.0);
-        #endif
+  if (millis() - lastGPSUpdate > GPS_UPDATE_INTERVAL) {
+    while (GPS_SERIAL.available() > 0) {
+      if (gps.encode(GPS_SERIAL.read())) {
+        if (gps.location.isValid() && gps.location.isUpdated()) {
+          // Format: LAT:value,LON:value,HDG:value
+          String gpsData = "LAT:" + String(gps.location.lat(), 9) + 
+                          ",LON:" + String(gps.location.lng(), 9) + 
+                          ",HDG:" + (gps.course.isValid() ? String(gps.course.deg(), 1) : "0.0");
+          
+          HC12_SERIAL.println(gpsData);
+          DEBUG_PRINTLN("SENT: " + gpsData);
+          lastGPSUpdate = millis();
+        }
       }
     }
   }
@@ -89,6 +80,7 @@ void loop() {
   if (HC12_SERIAL.available() > 0) {
     String command = HC12_SERIAL.readStringUntil('\n');
     command.trim();
+    DEBUG_PRINTLN("CMD: " + command);
     
     int comma1 = command.indexOf(',');
     int comma2 = command.indexOf(',', comma1 + 1);
@@ -102,6 +94,10 @@ void loop() {
 
       // Drive motors
       setMotorSpeeds(pwm_left, pwm_right);
+      
+      // Send ACK
+      HC12_SERIAL.println("ACK");
+      DEBUG_PRINTLN("ACK sent");
     }
   }
 
